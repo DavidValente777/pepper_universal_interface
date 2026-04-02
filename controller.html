@@ -1,0 +1,1909 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Pepper Controller</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; }
+    body { font-family: sans-serif; margin: 0; background-color: #f5f5f5; }
+    label { font-size: 18px; display:block; margin-bottom: 8px; }
+    input {
+      font-size: 18px;
+      padding: 10px 12px;
+      width: 100%;
+      box-sizing: border-box;
+    }
+    button {
+      font-size: 18px;
+      padding: 10px 16px;
+      cursor: pointer;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      margin-right: 10px;
+      font-weight: bold;
+    }
+    button:hover {
+      opacity: 0.9;
+    }
+    .row { display:flex; align-items:center; flex-wrap:wrap; gap: 10px; margin-top: 10px; }
+
+    .hint { margin-top: 18px; color: #444; }
+
+    /* Instant Send Cards */
+    .instant-send-container {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+      gap: 20px;
+      margin-bottom: 40px;
+    }
+    .instant-card {
+      padding: 25px;
+      border-radius: 12px;
+      border: 3px solid;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .instant-card h2 {
+      margin: 0 0 20px 0;
+      font-size: 24px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .instant-card .icon {
+      font-size: 32px;
+    }
+
+    /* Color schemes */
+    .speech-card {
+      background: #fff9e6;
+      border-color: #ffc107;
+    }
+    .speech-card button {
+      background-color: #ffc107;
+      color: #000;
+    }
+
+    .text-card {
+      background: #e3f2fd;
+      border-color: #2196F3;
+    }
+    .text-card button {
+      background-color: #2196F3;
+    }
+
+    .image-card {
+      background: #ffebee;
+      border-color: #f44336;
+    }
+    .image-card button {
+      background-color: #f44336;
+    }
+
+    .control-card {
+      background: #f5f5f5;
+      border-color: #9e9e9e;
+    }
+    .control-card button {
+      background-color: #9e9e9e;
+    }
+
+    /* Timeline Styles */
+    .timeline-section {
+      margin-top: 40px;
+      padding: 30px;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    .timeline-controls {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 20px;
+      flex-wrap: wrap;
+    }
+    .timeline-controls button {
+      background-color: #4CAF50;
+    }
+    .timeline-controls button.stop {
+      background-color: #f44336;
+    }
+    .timeline-controls button.clear-timeline {
+      background-color: #9e9e9e;
+    }
+    .timeline-controls button.export {
+      background-color: #9C27B0;
+    }
+    .timeline-controls button.import {
+      background-color: #673AB7;
+    }
+
+    #timeline {
+      min-height: 150px;
+      background-color: #fafafa;
+      border: 3px dashed #ccc;
+      border-radius: 8px;
+      padding: 15px;
+      display: flex;
+      gap: 10px;
+      overflow-x: auto;
+      align-items: flex-start;
+    }
+    #timeline.empty::after {
+      content: 'Drag blocks here or click "Add to Timeline" buttons above';
+      color: #999;
+      font-size: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      height: 100%;
+      min-height: 120px;
+    }
+
+    .timeline-block {
+      background: white;
+      border: 3px solid;
+      border-radius: 8px;
+      padding: 10px;
+      min-width: 150px;
+      max-width: 200px;
+      cursor: move;
+      position: relative;
+      flex-shrink: 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .timeline-block.dragging {
+      opacity: 0.5;
+    }
+    .timeline-block.delay {
+      border-color: #9e9e9e;
+      background-color: #f5f5f5;
+    }
+    .timeline-block.speech {
+      border-color: #ffc107;
+      background-color: #fff9e6;
+    }
+    .timeline-block.image {
+      border-color: #f44336;
+      background-color: #ffebee;
+    }
+    .timeline-block.text {
+      border-color: #2196F3;
+      background-color: #e3f2fd;
+    }
+
+    .block-header {
+      font-weight: bold;
+      margin-bottom: 8px;
+      font-size: 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .block-type {
+      background: rgba(0,0,0,0.1);
+      padding: 2px 8px;
+      border-radius: 3px;
+      font-size: 12px;
+    }
+    .block-content {
+      font-size: 13px;
+      color: #333;
+      margin-bottom: 8px;
+    }
+    .block-thumbnail {
+      width: 100%;
+      height: 80px;
+      object-fit: cover;
+      border-radius: 4px;
+      margin-bottom: 8px;
+    }
+    .block-actions {
+      display: flex;
+      gap: 5px;
+    }
+    .block-actions button {
+      font-size: 12px;
+      padding: 5px 10px;
+      margin: 0;
+      background-color: #f44336;
+    }
+
+    .add-block-section {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 15px;
+      margin-bottom: 20px;
+    }
+    .add-block-card {
+      border: 3px solid;
+      border-radius: 8px;
+      padding: 15px;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .add-block-card h3 {
+      margin: 0 0 10px 0;
+      font-size: 18px;
+    }
+    .add-block-card.speech {
+      background: #fff9e6;
+      border-color: #ffc107;
+    }
+    .add-block-card.speech button {
+      background-color: #ffc107;
+      color: #000;
+    }
+    .add-block-card.text {
+      background: #e3f2fd;
+      border-color: #2196F3;
+    }
+    .add-block-card.text button {
+      background-color: #2196F3;
+    }
+    .add-block-card.image {
+      background: #ffebee;
+      border-color: #f44336;
+    }
+    .add-block-card.image button {
+      background-color: #f44336;
+    }
+    .add-block-card.delay {
+      background: #f5f5f5;
+      border-color: #9e9e9e;
+    }
+    .add-block-card.delay button {
+      background-color: #9e9e9e;
+    }
+    .add-block-card.motion {
+      background: #e8f5e9;
+      border-color: #4CAF50;
+    }
+    .add-block-card.motion button {
+      background-color: #4CAF50;
+    }
+
+    /* Motion Card Styles */
+    .motion-card {
+      background: #e8f5e9;
+      border-color: #4CAF50;
+    }
+    .motion-card button {
+      background-color: #4CAF50;
+    }
+    .motion-select-wrapper {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+    .motion-select-wrapper select {
+      flex: 1;
+      font-size: 16px;
+      padding: 10px 12px;
+      border: 2px solid #4CAF50;
+      border-radius: 6px;
+      background: white;
+      cursor: pointer;
+    }
+    .favorite-btn {
+      background: transparent !important;
+      border: none;
+      font-size: 24px;
+      cursor: pointer;
+      padding: 5px;
+      color: #ccc;
+      transition: color 0.2s, transform 0.2s;
+    }
+    .favorite-btn:hover {
+      transform: scale(1.2);
+    }
+    .favorite-btn.active {
+      color: #ffc107;
+    }
+    .motion-filter {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+    .motion-filter button {
+      font-size: 14px;
+      padding: 6px 12px;
+      background: #e0e0e0 !important;
+      color: #333 !important;
+      border-radius: 20px;
+    }
+    .motion-filter button.active {
+      background: #4CAF50 !important;
+      color: white !important;
+    }
+
+    /* Timeline motion block */
+    .timeline-block.motion {
+      border-color: #4CAF50;
+      background-color: #e8f5e9;
+    }
+
+    /* Connection Panel Styles */
+    .connection-panel {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      border-radius: 12px;
+      padding: 20px 30px;
+      margin-bottom: 30px;
+      box-shadow: 0 4px 15px rgba(102, 126, 234, 0.3);
+      color: white;
+    }
+    .connection-panel h2 {
+      margin: 0 0 15px 0;
+      font-size: 22px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .connection-form {
+      display: flex;
+      gap: 15px;
+      align-items: flex-end;
+      flex-wrap: wrap;
+    }
+    .connection-form .input-group {
+      flex: 1;
+      min-width: 180px;
+    }
+    .connection-form label {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 5px;
+      opacity: 0.9;
+    }
+    .connection-form input,
+    .connection-form select {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 16px;
+      border: none;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.95);
+      color: #333;
+    }
+    .connection-form input::placeholder {
+      color: #999;
+    }
+    .connection-form select {
+      cursor: pointer;
+    }
+    .custom-ip-input {
+      margin-top: 8px;
+      display: none;
+    }
+    .custom-ip-input.visible {
+      display: block;
+    }
+    .input-with-button {
+      display: flex;
+      gap: 8px;
+    }
+    .input-with-button input {
+      flex: 1;
+    }
+    .detect-ip-btn {
+      background: rgba(255,255,255,0.2) !important;
+      border: 2px solid rgba(255,255,255,0.4) !important;
+      color: white !important;
+      padding: 8px 12px !important;
+      font-size: 14px !important;
+      white-space: nowrap;
+      border-radius: 6px;
+    }
+    .detect-ip-btn:hover {
+      background: rgba(255,255,255,0.3) !important;
+    }
+    .detect-ip-btn:disabled {
+      opacity: 0.5;
+      cursor: wait !important;
+    }
+    .connection-form button {
+      background: #4CAF50;
+      padding: 10px 25px;
+      font-size: 16px;
+      border-radius: 6px;
+      white-space: nowrap;
+    }
+    .connection-form button:disabled {
+      background: #888;
+      cursor: not-allowed;
+    }
+    .connection-form button.disconnect {
+      background: #f44336;
+    }
+    .connection-status {
+      margin-top: 15px;
+      padding: 12px 15px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 15px;
+    }
+    .connection-status.disconnected {
+      background: rgba(255,255,255,0.15);
+    }
+    .connection-status.connected {
+      background: rgba(76, 175, 80, 0.3);
+    }
+    .connection-status.connecting {
+      background: rgba(255, 193, 7, 0.3);
+    }
+    .connection-status.error {
+      background: rgba(244, 67, 54, 0.3);
+    }
+    .status-dot {
+      width: 12px;
+      height: 12px;
+      border-radius: 50%;
+      flex-shrink: 0;
+    }
+    .status-dot.disconnected { background: #888; }
+    .status-dot.connected { background: #4CAF50; }
+    .status-dot.connecting { background: #ffc107; animation: pulse 1s infinite; }
+    .status-dot.error { background: #f44336; }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .ip-display {
+      display: flex;
+      gap: 20px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    .ip-badge {
+      background: rgba(255,255,255,0.2);
+      padding: 8px 15px;
+      border-radius: 20px;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .ip-badge strong {
+      opacity: 0.8;
+    }
+
+    /* Robot Control Panel */
+    .robot-control-panel {
+      background: linear-gradient(135deg, #2d3436 0%, #636e72 100%);
+      border-radius: 12px;
+      padding: 20px 30px;
+      margin-bottom: 30px;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.3);
+      color: white;
+    }
+    .robot-control-panel h2 {
+      margin: 0 0 15px 0;
+      font-size: 22px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .robot-control-buttons {
+      display: flex;
+      gap: 15px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .robot-control-buttons button {
+      font-size: 18px;
+      padding: 15px 30px;
+      border-radius: 8px;
+      font-weight: bold;
+      transition: transform 0.1s, box-shadow 0.1s;
+    }
+    .robot-control-buttons button:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    }
+    .robot-control-buttons button:active {
+      transform: translateY(0);
+    }
+    .robot-control-buttons button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+      transform: none;
+    }
+    .wake-up-btn {
+      background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+    }
+    .stop-btn {
+      background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+    }
+    .emergency-stop-btn {
+      background: linear-gradient(135deg, #f44336 0%, #c62828 100%);
+      font-size: 20px !important;
+      padding: 18px 40px !important;
+      border: 3px solid #ffcdd2;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+    .emergency-stop-btn:hover {
+      border-color: #fff;
+    }
+    .robot-status {
+      margin-left: auto;
+      padding: 10px 20px;
+      background: rgba(255,255,255,0.1);
+      border-radius: 20px;
+      font-size: 14px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .robot-status .status-indicator {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #888;
+    }
+    .robot-status .status-indicator.awake {
+      background: #4CAF50;
+      box-shadow: 0 0 8px #4CAF50;
+    }
+    .robot-status .status-indicator.resting {
+      background: #ff9800;
+    }
+  </style>
+</head>
+<body>
+  <div style="padding: 30px;">
+    <h1 style="text-align: center; margin-bottom: 40px; margin-top: 20px; font-size: 36px;">Pepper Controller</h1>
+
+  <!-- Connection Panel -->
+  <div class="connection-panel">
+    <h2>Connection</h2>
+    <div class="connection-form">
+      <div class="input-group">
+        <label for="hostSelect">Your Computer IP (on Pepper's network)</label>
+        <select id="hostSelect">
+          <option value="">-- Select Your IP --</option>
+          <option value="custom-host">Other...</option>
+        </select>
+        <input type="text" id="hostIp" class="custom-ip-input" placeholder="Run 'hostname -I' in a terminal to find your IP" style="display:none;" />
+        <button type="button" id="detectIpBtn" style="display:none;"></button>
+      </div>
+      <div class="input-group">
+        <label for="pepperSelect">Pepper Robot</label>
+        <select id="pepperSelect">
+          <option value="">-- Select Robot --</option>
+          <option value="custom">Add new...</option>
+        </select>
+        <input type="text" id="pepperIp" class="custom-ip-input" placeholder="Enter custom IP (e.g., 192.168.1.100)" />
+      </div>
+      <button id="connectBtn">Connect</button>
+    </div>
+    <div id="connectionStatus" class="connection-status disconnected">
+      <span class="status-dot disconnected"></span>
+      <span>Not connected - Enter IPs and click Connect</span>
+    </div>
+    <div id="ipDisplay" class="ip-display" style="display: none;">
+      <div class="ip-badge">
+        <strong>Host:</strong>
+        <span id="displayHostIp">-</span>
+      </div>
+      <div class="ip-badge">
+        <strong>Pepper:</strong>
+        <span id="displayPepperIp">-</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Robot Control Panel -->
+  <div class="robot-control-panel">
+    <h2>Robot Control</h2>
+    <div class="robot-control-buttons">
+      <button id="wakeUpBtn" class="wake-up-btn" title="Wake up Pepper - enables motors and lifts head">
+        Wake Up
+      </button>
+      <button id="stopMotionBtn2" class="stop-btn" title="Stop current motion/animation">
+        Stop Motion
+      </button>
+      <button id="emergencyStopBtn" class="emergency-stop-btn" title="Emergency stop - puts robot in safe rest position">
+        Emergency Stop
+      </button>
+      <div class="robot-status">
+        <span class="status-indicator" id="robotStatusIndicator"></span>
+        <span id="robotStatusText">Unknown</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Instant Send Section -->
+  <h2 style="text-align: center; margin-bottom: 20px; font-size: 28px;">Instant Send</h2>
+
+  <div class="instant-send-container">
+    <!-- Speech Card -->
+    <div class="instant-card speech-card">
+      <h2><span class="icon">Speech</span></h2>
+      <label for="speechText">Make Pepper speak:</label>
+      <input id="speechText" type="text" placeholder="Enter text for Pepper to speak..." />
+      <div class="row">
+        <button id="speakBtn">Speak Now</button>
+      </div>
+    </div>
+
+    <!-- Text Card -->
+    <div class="instant-card text-card">
+      <h2><span class="icon">Text Display</span></h2>
+      <label for="msg">Show text on tablet:</label>
+      <input id="msg" type="text" placeholder="Type something..." />
+
+      <div class="row" style="margin-top: 15px;">
+        <label style="margin: 0;">Color:</label>
+        <input type="color" id="colorPicker" value="#000000" style="width: 50px; height: 35px; cursor: pointer; padding: 2px;" />
+
+        <label style="margin: 0 0 0 15px;">Size:</label>
+        <button id="decreaseSize" style="padding: 5px 12px;">-</button>
+        <span id="fontSizeDisplay" style="margin: 0 5px; font-weight: bold;">110px</span>
+        <button id="increaseSize" style="padding: 5px 12px;">+</button>
+      </div>
+
+      <div class="row" style="margin-top: 15px;">
+        <button id="send">Send to Pepper</button>
+        <button id="clear" style="background-color: #757575;">Clear Screen</button>
+      </div>
+    </div>
+
+    <!-- Image Card -->
+    <div class="instant-card image-card">
+      <h2><span class="icon">Image Display</span></h2>
+      <div id="dropZone" style="
+        border: 2px dashed #f44336;
+        border-radius: 8px;
+        padding: 30px;
+        text-align: center;
+        background-color: rgba(255,255,255,0.5);
+        cursor: pointer;
+        transition: all 0.3s;
+        margin-bottom: 15px;
+      ">
+        <p style="margin: 0; font-size: 16px; color: #666;">
+          Drag & Drop or Click<br>
+        </p>
+        <p style="margin: 5px 0 0 0; font-size: 12px; color: #999;">
+          JPG, PNG
+        </p>
+      </div>
+
+      <input type="file" id="imageInput" accept="image/jpeg,image/jpg,image/png" style="display: none;" />
+
+      <div id="imagePreview" style="display: none; margin-top: 15px;">
+        <p style="font-weight: bold;">Preview:</p>
+        <img id="previewImg" style="max-width: 100%; max-height: 150px; border: 2px solid #f44336; border-radius: 4px; margin-bottom: 10px;" />
+        <div class="row">
+          <button id="sendImage">Send to Pepper</button>
+          <button id="clearImage" style="background-color: #757575;">Remove</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Motion Card -->
+    <div class="instant-card motion-card">
+      <h2><span class="icon">Motions</span></h2>
+      <label>Make Pepper perform a motion:</label>
+      <div class="motion-filter">
+        <button id="filterAll" class="active">All</button>
+        <button id="filterFavorites">Favorites</button>
+      </div>
+      <div class="motion-select-wrapper">
+        <select id="motionSelect">
+          <option value="">-- Select a motion --</option>
+          <optgroup label="Dances">
+            <option value="animations/Stand/Gestures/Hey_1">Hey</option>
+            <option value="animations/Stand/Gestures/BowShort_1">Bow</option>
+            <option value="animations/Stand/Gestures/Enthusiastic_4">Enthusiastic</option>
+            <option value="animations/Stand/Gestures/Excited_1">Excited</option>
+            <option value="animations/Stand/Waiting/WakeUp_1">Wake Up</option>
+          </optgroup>
+          <optgroup label="Gestures">
+            <option value="animations/Stand/Gestures/Yes_1">Yes (Nod)</option>
+            <option value="animations/Stand/Gestures/No_1">No (Shake)</option>
+            <option value="animations/Stand/Gestures/Think_1">Think</option>
+            <option value="animations/Stand/Gestures/Explain_1">Explain</option>
+            <option value="animations/Stand/Gestures/ShowSky_1">Show Sky</option>
+          </optgroup>
+          <optgroup label="Emotions">
+            <option value="animations/Stand/Emotions/Positive/Happy_4">Happy</option>
+            <option value="animations/Stand/Emotions/Positive/Laugh_1">Laugh</option>
+            <option value="animations/Stand/Emotions/Negative/Sad_1">Sad</option>
+            <option value="animations/Stand/Emotions/Negative/Surprise_1">Surprise</option>
+            <option value="animations/Stand/Emotions/Neutral/AskForAttention_1">Ask for Attention</option>
+          </optgroup>
+          <optgroup label="Reactions">
+            <option value="animations/Stand/Reactions/ShakeBody_1">Shake Body</option>
+            <option value="animations/Stand/Reactions/SeeSomething_1">See Something</option>
+            <option value="animations/Stand/Reactions/TouchHead_1">Touch Head</option>
+          </optgroup>
+        </select>
+        <button id="favoriteMotionBtn" class="favorite-btn" title="Add to favorites">&#9734;</button>
+      </div>
+      <div class="row">
+        <button id="playMotionBtn">Play Motion</button>
+        <button id="stopMotionBtn" style="background-color: #757575;">Stop</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Timeline Section -->
+  <div class="timeline-section">
+    <h2 style="text-align: center; margin-bottom: 25px; font-size: 28px;">Timeline Sequence Builder</h2>
+
+    <div class="add-block-section">
+      <!-- Add Speech Block -->
+      <div class="add-block-card speech">
+        <h3>Speech</h3>
+        <input id="timelineSpeech" type="text" placeholder="Text to speak..." style="width: 100%; margin-bottom: 10px;" />
+        <button id="addSpeechBlock" style="width: 100%;">Add to Timeline</button>
+      </div>
+
+      <!-- Add Text Block -->
+      <div class="add-block-card text">
+        <h3>Text</h3>
+        <input id="timelineText" type="text" placeholder="Enter text..." style="width: 100%; margin-bottom: 10px;" />
+        <button id="addTextBlock" style="width: 100%;">Add to Timeline</button>
+      </div>
+
+      <!-- Add Image Block -->
+      <div class="add-block-card image">
+        <h3>Image</h3>
+        <input type="file" id="timelineImageInput" accept="image/jpeg,image/jpg,image/png" style="margin-bottom: 10px;" />
+        <button id="addImageBlock" style="width: 100%;">Add to Timeline</button>
+      </div>
+
+      <!-- Add Delay Block -->
+      <div class="add-block-card delay">
+        <h3>Delay</h3>
+        <input id="delaySeconds" type="number" min="1" max="60" value="3" style="width: 100%; margin-bottom: 10px;" placeholder="Seconds" />
+        <button id="addDelayBlock" style="width: 100%;">Add to Timeline</button>
+      </div>
+
+      <!-- Add Motion Block -->
+      <div class="add-block-card motion">
+        <h3>Motion</h3>
+        <div class="motion-select-wrapper" style="margin-bottom: 10px;">
+          <select id="timelineMotionSelect" style="flex: 1; font-size: 14px; padding: 8px;">
+            <option value="">-- Select motion --</option>
+            <optgroup label="Dances">
+              <option value="animations/Stand/Gestures/Hey_1">Hey</option>
+              <option value="animations/Stand/Gestures/BowShort_1">Bow</option>
+              <option value="animations/Stand/Gestures/Enthusiastic_4">Enthusiastic</option>
+              <option value="animations/Stand/Gestures/Excited_1">Excited</option>
+              <option value="animations/Stand/Waiting/WakeUp_1">Wake Up</option>
+            </optgroup>
+            <optgroup label="Gestures">
+              <option value="animations/Stand/Gestures/Yes_1">Yes (Nod)</option>
+              <option value="animations/Stand/Gestures/No_1">No (Shake)</option>
+              <option value="animations/Stand/Gestures/Think_1">Think</option>
+              <option value="animations/Stand/Gestures/Explain_1">Explain</option>
+              <option value="animations/Stand/Gestures/ShowSky_1">Show Sky</option>
+            </optgroup>
+            <optgroup label="Emotions">
+              <option value="animations/Stand/Emotions/Positive/Happy_4">Happy</option>
+              <option value="animations/Stand/Emotions/Positive/Laugh_1">Laugh</option>
+              <option value="animations/Stand/Emotions/Negative/Sad_1">Sad</option>
+              <option value="animations/Stand/Emotions/Negative/Surprise_1">Surprise</option>
+              <option value="animations/Stand/Emotions/Neutral/AskForAttention_1">Ask for Attention</option>
+            </optgroup>
+            <optgroup label="Reactions">
+              <option value="animations/Stand/Reactions/ShakeBody_1">Shake Body</option>
+              <option value="animations/Stand/Reactions/SeeSomething_1">See Something</option>
+              <option value="animations/Stand/Reactions/TouchHead_1">Touch Head</option>
+            </optgroup>
+          </select>
+          <button id="timelineFavoriteMotionBtn" class="favorite-btn" title="Add to favorites">&#9734;</button>
+        </div>
+        <button id="addMotionBlock" style="width: 100%;">Add to Timeline</button>
+      </div>
+    </div>
+
+    <div class="timeline-controls">
+      <button id="playTimeline">Play Timeline</button>
+      <button id="stopTimeline" class="stop">Stop</button>
+      <button id="clearTimeline" class="clear-timeline">Clear All</button>
+      <button id="exportTimeline" class="export">Export</button>
+      <button id="importTimelineBtn" class="import">Import</button>
+      <input type="file" id="importTimelineInput" accept=".json" style="display: none;" />
+    </div>
+
+    <div id="timeline" class="empty"></div>
+  </div>
+  </div>
+
+  <script type="text/javascript">
+    let currentFontSize = 110;
+    let currentColor = "#000000";
+    let currentImageData = null;
+    let timelineBlocks = [];
+    let isPlaying = false;
+    let playbackAborted = false;
+    let isConnected = false;
+    let autoReconnecting = false;
+    let lastConnectedHostIp = null;
+    let lastConnectedPepperIp = null;
+    let favoriteMotions = JSON.parse(localStorage.getItem('favoriteMotions') || '[]');
+    let showOnlyFavorites = false;
+
+    // Motion functions
+    function saveFavorites() {
+      localStorage.setItem('favoriteMotions', JSON.stringify(favoriteMotions));
+    }
+
+    function isMotionFavorite(motionValue) {
+      return favoriteMotions.includes(motionValue);
+    }
+
+    function toggleFavorite(motionValue, buttonEl) {
+      if (!motionValue) return;
+
+      const index = favoriteMotions.indexOf(motionValue);
+      if (index > -1) {
+        favoriteMotions.splice(index, 1);
+        buttonEl.textContent = '\u2606';
+        buttonEl.classList.remove('active');
+      } else {
+        favoriteMotions.push(motionValue);
+        buttonEl.textContent = '\u2605';
+        buttonEl.classList.add('active');
+      }
+      saveFavorites();
+    }
+
+    function updateFavoriteButton(selectEl, buttonEl) {
+      const motionValue = selectEl.value;
+      if (motionValue && isMotionFavorite(motionValue)) {
+        buttonEl.textContent = '\u2605';
+        buttonEl.classList.add('active');
+      } else {
+        buttonEl.textContent = '\u2606';
+        buttonEl.classList.remove('active');
+      }
+    }
+
+    function filterMotions(showFavorites) {
+      showOnlyFavorites = showFavorites;
+      const select = document.getElementById('motionSelect');
+      const options = select.querySelectorAll('option[value]');
+
+      options.forEach(option => {
+        if (!option.value) return;
+        if (showFavorites) {
+          option.style.display = isMotionFavorite(option.value) ? '' : 'none';
+        } else {
+          option.style.display = '';
+        }
+      });
+
+      document.getElementById('filterAll').classList.toggle('active', !showFavorites);
+      document.getElementById('filterFavorites').classList.toggle('active', showFavorites);
+    }
+
+    async function playMotion() {
+      const select = document.getElementById('motionSelect');
+      const motionValue = select.value;
+
+      if (!motionValue) {
+        alert('Please select a motion');
+        return;
+      }
+
+      try {
+        const response = await fetch('/motion', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ motion: motionValue })
+        });
+        const result = await response.text();
+        console.log('Motion result:', result);
+      } catch (error) {
+        console.error('Motion error:', error);
+        alert('Failed to play motion');
+      }
+    }
+
+    async function stopMotion() {
+      try {
+        await fetch('/stop-motion', { method: 'POST' });
+        console.log('Motion stopped');
+      } catch (error) {
+        console.error('Stop motion error:', error);
+      }
+    }
+
+    // Robot control functions
+    async function wakeUpRobot() {
+      if (!isConnected) {
+        alert('Please connect to Pepper first');
+        return;
+      }
+
+      const btn = document.getElementById('wakeUpBtn');
+      btn.disabled = true;
+      btn.textContent = 'Waking...';
+
+      try {
+        const response = await fetch('/wake-up', { method: 'POST' });
+        const result = await response.json();
+
+        if (result.success) {
+          updateRobotStatus('awake');
+          console.log('Robot woken up');
+        } else {
+          alert('Failed to wake up robot: ' + (result.error || 'Unknown error'));
+        }
+      } catch (error) {
+        console.error('Wake up error:', error);
+        alert('Failed to wake up robot');
+      }
+
+      btn.disabled = false;
+      btn.textContent = 'Wake Up';
+    }
+
+    async function emergencyStop() {
+      if (!isConnected) {
+        alert('Please connect to Pepper first');
+        return;
+      }
+
+      const btn = document.getElementById('emergencyStopBtn');
+      btn.disabled = true;
+
+      try {
+        const response = await fetch('/emergency-stop', { method: 'POST' });
+        const result = await response.json();
+
+        if (result.success) {
+          updateRobotStatus('resting');
+          console.log('Emergency stop executed');
+        } else {
+          alert('Emergency stop failed: ' + (result.error || 'Unknown error'));
+        }
+      } catch (error) {
+        console.error('Emergency stop error:', error);
+        alert('Emergency stop failed');
+      }
+
+      btn.disabled = false;
+    }
+
+    function updateRobotStatus(status) {
+      const indicator = document.getElementById('robotStatusIndicator');
+      const text = document.getElementById('robotStatusText');
+
+      indicator.className = 'status-indicator';
+
+      if (status === 'awake') {
+        indicator.classList.add('awake');
+        text.textContent = 'Awake';
+      } else if (status === 'resting') {
+        indicator.classList.add('resting');
+        text.textContent = 'Resting';
+      } else {
+        text.textContent = 'Unknown';
+      }
+    }
+
+    function getMotionDisplayName(motionValue) {
+      const select = document.getElementById('motionSelect');
+      const option = select.querySelector(`option[value="${motionValue}"]`);
+      return option ? option.textContent : motionValue.split('/').pop();
+    }
+
+    function addMotionBlock() {
+      const select = document.getElementById('timelineMotionSelect');
+      const motionValue = select.value;
+
+      if (!motionValue) {
+        alert('Please select a motion');
+        return;
+      }
+
+      const block = {
+        type: 'motion',
+        motion: motionValue,
+        displayName: getMotionDisplayName(motionValue),
+        id: Date.now()
+      };
+
+      timelineBlocks.push(block);
+      select.value = '';
+      updateFavoriteButton(select, document.getElementById('timelineFavoriteMotionBtn'));
+      renderTimeline();
+    }
+
+    // IP Detection function using WebRTC
+    async function detectLocalIp() {
+      return new Promise((resolve, reject) => {
+        const ips = [];
+        const RTCPeerConnection = window.RTCPeerConnection || window.webkitRTCPeerConnection || window.mozRTCPeerConnection;
+
+        if (!RTCPeerConnection) {
+          reject(new Error("WebRTC not supported"));
+          return;
+        }
+
+        const pc = new RTCPeerConnection({
+          iceServers: []
+        });
+
+        pc.createDataChannel("");
+
+        pc.onicecandidate = (event) => {
+          if (!event || !event.candidate) {
+            pc.close();
+            const localIps = ips.filter(ip =>
+              ip.startsWith("192.168.") ||
+              ip.startsWith("10.") ||
+              /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(ip)
+            );
+
+            if (localIps.length > 0) {
+              resolve(localIps);
+            } else if (ips.length > 0) {
+              resolve(ips);
+            } else {
+              reject(new Error("No IP addresses found"));
+            }
+            return;
+          }
+
+          const candidate = event.candidate.candidate;
+          const ipMatch = candidate.match(/(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/);
+          if (ipMatch && !ips.includes(ipMatch[1])) {
+            ips.push(ipMatch[1]);
+          }
+        };
+
+        pc.createOffer()
+          .then(offer => pc.setLocalDescription(offer))
+          .catch(reject);
+
+        setTimeout(() => {
+          pc.close();
+          if (ips.length > 0) {
+            resolve(ips);
+          } else {
+            reject(new Error("IP detection timed out"));
+          }
+        }, 3000);
+      });
+    }
+
+    async function handleDetectIp() {
+      const btn = document.getElementById("detectIpBtn");
+      const hostInput = document.getElementById("hostIp");
+
+      btn.disabled = true;
+      btn.textContent = "Detecting...";
+
+      try {
+        const ips = await detectLocalIp();
+
+        if (ips.length === 1) {
+          if (confirm(`Detected IP address: ${ips[0]}\n\nUse this as your computer IP?`)) {
+            hostInput.value = ips[0];
+            hostInput.style.display = "block";
+            document.getElementById("hostSelect").value = "custom-host";
+          }
+        } else if (ips.length > 1) {
+          const ipList = ips.map((ip, i) => `${i + 1}. ${ip}`).join("\n");
+          const choice = prompt(
+            `Multiple IP addresses detected:\n\n${ipList}\n\nEnter the number of the IP to use (1-${ips.length}):`,
+            "1"
+          );
+
+          if (choice) {
+            const index = parseInt(choice) - 1;
+            if (index >= 0 && index < ips.length) {
+              hostInput.value = ips[index];
+            }
+          }
+        }
+      } catch (error) {
+        alert("Could not detect IP address automatically.\n\nPlease enter your IP manually.\n\nTip: You can find your IP by running 'ipconfig' (Windows) or 'ifconfig' (Mac/Linux) in the terminal.");
+        console.error("IP detection error:", error);
+      }
+
+      btn.disabled = false;
+      btn.textContent = "Detect";
+    }
+
+    // Connection functions
+    function updateConnectionStatus(status, message) {
+      const statusEl = document.getElementById("connectionStatus");
+      const dotEl = statusEl.querySelector(".status-dot");
+      const textEl = statusEl.querySelector("span:last-child");
+
+      statusEl.className = "connection-status " + status;
+      dotEl.className = "status-dot " + status;
+      textEl.textContent = message;
+    }
+
+    function updateIpDisplay(hostIp, pepperIp) {
+      const ipDisplay = document.getElementById("ipDisplay");
+      if (hostIp && pepperIp) {
+        document.getElementById("displayHostIp").textContent = hostIp;
+        document.getElementById("displayPepperIp").textContent = pepperIp;
+        ipDisplay.style.display = "flex";
+      } else {
+        ipDisplay.style.display = "none";
+      }
+    }
+
+    async function autoReconnect() {
+      if (autoReconnecting) return false;
+      if (!lastConnectedHostIp || !lastConnectedPepperIp) return false;
+
+      autoReconnecting = true;
+      console.log("Auto-reconnecting to Pepper...");
+      updateConnectionStatus("connecting", "Reconnecting to Pepper...");
+
+      try {
+        const response = await fetch("/connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hostIp: lastConnectedHostIp, pepperIp: lastConnectedPepperIp })
+        });
+        const result = await response.json();
+
+        if (result.success) {
+          isConnected = true;
+          updateConnectionStatus("connected", "Connected to Pepper (auto-reconnected)");
+          updateIpDisplay(lastConnectedHostIp, lastConnectedPepperIp);
+          document.getElementById("connectBtn").textContent = "Disconnect";
+          document.getElementById("connectBtn").classList.add("disconnect");
+          console.log("Auto-reconnect successful");
+          autoReconnecting = false;
+          return true;
+        } else {
+          console.error("Auto-reconnect failed:", result.error);
+          isConnected = false;
+          updateConnectionStatus("error", "Auto-reconnect failed: " + result.error);
+          autoReconnecting = false;
+          return false;
+        }
+      } catch (error) {
+        console.error("Auto-reconnect error:", error);
+        isConnected = false;
+        updateConnectionStatus("error", "Auto-reconnect error: " + error.message);
+        autoReconnecting = false;
+        return false;
+      }
+    }
+
+    async function checkConnectionStatus() {
+      try {
+        const response = await fetch("/status");
+        const data = await response.json();
+
+        if (data.connected) {
+          isConnected = true;
+          updateConnectionStatus("connected", "Connected to Pepper");
+          updateIpDisplay(data.hostIp, data.pepperIp);
+          document.getElementById("hostIp").value = data.hostIp || "";
+          setPepperIp(data.pepperIp || "");
+          lastConnectedHostIp = data.hostIp;
+          lastConnectedPepperIp = data.pepperIp;
+          document.getElementById("connectBtn").textContent = "Disconnect";
+          document.getElementById("connectBtn").classList.add("disconnect");
+        } else {
+          if (isConnected && lastConnectedHostIp && lastConnectedPepperIp) {
+            console.log("Connection dropped — triggering auto-reconnect");
+            isConnected = false;
+            await autoReconnect();
+          } else {
+            isConnected = false;
+            updateConnectionStatus("disconnected", "Not connected - Enter IPs and click Connect");
+            updateIpDisplay(null, null);
+            document.getElementById("connectBtn").textContent = "Connect";
+            document.getElementById("connectBtn").classList.remove("disconnect");
+          }
+        }
+      } catch (error) {
+        console.error("Status check error:", error);
+      }
+    }
+
+    function getPepperIp() {
+      const select = document.getElementById("pepperSelect");
+      const customInput = document.getElementById("pepperIp");
+
+      if (select.value === "custom") {
+        return customInput.value.trim();
+      }
+      return select.value;
+    }
+
+    function setPepperIp(ip) {
+      const select = document.getElementById("pepperSelect");
+      const customInput = document.getElementById("pepperIp");
+
+      const options = Array.from(select.options);
+      const matchingOption = options.find(opt => opt.value === ip);
+
+      if (matchingOption && ip !== "custom") {
+        select.value = ip;
+        customInput.classList.remove("visible");
+      } else if (ip) {
+        select.value = "custom";
+        customInput.value = ip;
+        customInput.classList.add("visible");
+      }
+    }
+
+    async function connect() {
+      const hostIp = document.getElementById("hostIp").value.trim();
+      const pepperIp = getPepperIp();
+
+      if (!hostIp || !pepperIp) {
+        alert("Please enter both IP addresses");
+        return;
+      }
+
+      const ipRegex = /^(\d{1,3}\.){3}\d{1,3}$/;
+      if (!ipRegex.test(hostIp) || !ipRegex.test(pepperIp)) {
+        alert("Please enter valid IP addresses (e.g., 192.168.1.100)");
+        return;
+      }
+
+      updateConnectionStatus("connecting", "Connecting to Pepper...");
+      document.getElementById("connectBtn").disabled = true;
+
+      try {
+        const response = await fetch("/connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hostIp, pepperIp })
+        });
+
+        const result = await response.json();
+
+        if (result.success) {
+          isConnected = true;
+          lastConnectedHostIp = hostIp;
+          lastConnectedPepperIp = pepperIp;
+          updateConnectionStatus("connected", "Connected to Pepper");
+          updateIpDisplay(hostIp, pepperIp);
+          document.getElementById("connectBtn").textContent = "Disconnect";
+          document.getElementById("connectBtn").classList.add("disconnect");
+        } else {
+          updateConnectionStatus("error", "Connection failed: " + result.error);
+        }
+      } catch (error) {
+        updateConnectionStatus("error", "Connection error: " + error.message);
+      }
+
+      document.getElementById("connectBtn").disabled = false;
+    }
+
+    async function disconnect() {
+      try {
+        await fetch("/disconnect", { method: "POST" });
+        isConnected = false;
+        updateConnectionStatus("disconnected", "Disconnected");
+        updateIpDisplay(null, null);
+        document.getElementById("connectBtn").textContent = "Connect";
+        document.getElementById("connectBtn").classList.remove("disconnect");
+      } catch (error) {
+        console.error("Disconnect error:", error);
+      }
+    }
+
+    function toggleConnection() {
+      if (isConnected) {
+        disconnect();
+      } else {
+        connect();
+      }
+    }
+
+    // Check connection status on page load
+    window.addEventListener("load", checkConnectionStatus);
+
+    // Periodically check connection status to detect disconnections
+    setInterval(() => {
+      if (isConnected) {
+        checkConnectionStatus();
+      }
+    }, 5000);
+
+    // Instant send functions
+    async function speak() {
+      const text = document.getElementById("speechText").value.trim();
+      if (!text) {
+        alert("Please enter text for Pepper to speak");
+        return;
+      }
+
+      try {
+        const response = await fetch("/speak", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: text })
+        });
+        const result = await response.text();
+        console.log(result);
+      } catch (error) {
+        console.error("Speech error:", error);
+        alert("Failed to make Pepper speak");
+      }
+    }
+
+    async function send() {
+      const text = document.getElementById("msg").value.trim();
+      if (!text) return;
+
+      const params = new URLSearchParams({
+        text: text,
+        fontSize: currentFontSize,
+        color: currentColor
+      });
+
+      const r = await fetch("/send?" + params.toString());
+      const out = await r.text();
+      console.log(out);
+    }
+
+    async function clearScreen() {
+      document.getElementById("msg").value = "";
+      const r = await fetch("/send?text=");
+      const out = await r.text();
+      console.log(out);
+    }
+
+    function handleImageFile(file) {
+      if (!file || !file.type.match(/image\/(jpeg|jpg|png)/)) {
+        alert("Please select a valid JPG or PNG image.");
+        return;
+      }
+
+      const img = new Image();
+      img.onload = () => {
+        const MAX_W = 1280, MAX_H = 800;
+        let w = img.width, h = img.height;
+        if (w > MAX_W || h > MAX_H) {
+          const scale = Math.min(MAX_W / w, MAX_H / h);
+          w = Math.round(w * scale);
+          h = Math.round(h * scale);
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+        currentImageData = canvas.toDataURL("image/jpeg", 0.8);
+        document.getElementById("previewImg").src = currentImageData;
+        document.getElementById("imagePreview").style.display = "block";
+      };
+      const reader = new FileReader();
+      reader.onload = (e) => { img.src = e.target.result; };
+      reader.readAsDataURL(file);
+    }
+
+    async function sendImage() {
+      if (!currentImageData) return;
+
+      const response = await fetch("/send-image", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageData: currentImageData })
+      });
+
+      const result = await response.text();
+      console.log(result);
+    }
+
+    function clearImage() {
+      currentImageData = null;
+      document.getElementById("imagePreview").style.display = "none";
+      document.getElementById("imageInput").value = "";
+    }
+
+    // Timeline functions
+    function addSpeechBlock() {
+      const text = document.getElementById("timelineSpeech").value.trim();
+      if (!text) {
+        alert("Please enter text for Pepper to speak");
+        return;
+      }
+
+      const block = {
+        type: 'speech',
+        text: text,
+        id: Date.now()
+      };
+
+      timelineBlocks.push(block);
+      document.getElementById("timelineSpeech").value = "";
+      renderTimeline();
+    }
+
+    function addTextBlock() {
+      const text = document.getElementById("timelineText").value.trim();
+      if (!text) {
+        alert("Please enter some text");
+        return;
+      }
+
+      const block = {
+        type: 'text',
+        text: text,
+        fontSize: currentFontSize,
+        color: currentColor,
+        id: Date.now()
+      };
+
+      timelineBlocks.push(block);
+      document.getElementById("timelineText").value = "";
+      renderTimeline();
+    }
+
+    function addImageBlock() {
+      const fileInput = document.getElementById("timelineImageInput");
+      const file = fileInput.files[0];
+
+      if (!file) {
+        alert("Please select an image");
+        return;
+      }
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const block = {
+          type: 'image',
+          imageData: e.target.result,
+          fileName: file.name,
+          id: Date.now()
+        };
+
+        timelineBlocks.push(block);
+        fileInput.value = "";
+        renderTimeline();
+      };
+      reader.readAsDataURL(file);
+    }
+
+    function addDelayBlock() {
+      const seconds = parseInt(document.getElementById("delaySeconds").value);
+      if (!seconds || seconds < 1) {
+        alert("Please enter a valid delay time");
+        return;
+      }
+
+      const block = {
+        type: 'delay',
+        seconds: seconds,
+        id: Date.now()
+      };
+
+      timelineBlocks.push(block);
+      renderTimeline();
+    }
+
+    function deleteBlock(id) {
+      timelineBlocks = timelineBlocks.filter(b => b.id !== id);
+      renderTimeline();
+    }
+
+    function renderTimeline() {
+      const timeline = document.getElementById("timeline");
+
+      if (timelineBlocks.length === 0) {
+        timeline.classList.add("empty");
+        timeline.innerHTML = "";
+        return;
+      }
+
+      timeline.classList.remove("empty");
+      timeline.innerHTML = "";
+
+      timelineBlocks.forEach((block, index) => {
+        const blockEl = document.createElement("div");
+        blockEl.className = `timeline-block ${block.type}`;
+        blockEl.draggable = true;
+        blockEl.dataset.index = index;
+
+        let content = "";
+        if (block.type === 'text') {
+          content = `
+            <div class="block-header">
+              <span>Text</span>
+              <span class="block-type">${block.fontSize}px</span>
+            </div>
+            <div class="block-content" style="color: ${block.color};">${block.text}</div>
+          `;
+        } else if (block.type === 'speech') {
+          content = `
+            <div class="block-header">
+              <span>Speech</span>
+            </div>
+            <div class="block-content">"${block.text}"</div>
+          `;
+        } else if (block.type === 'image') {
+          content = `
+            <div class="block-header">
+              <span>Image</span>
+            </div>
+            <img src="${block.imageData}" class="block-thumbnail" />
+            <div class="block-content">${block.fileName}</div>
+          `;
+        } else if (block.type === 'delay') {
+          content = `
+            <div class="block-header">
+              <span>Wait</span>
+            </div>
+            <div class="block-content" style="font-size: 24px; text-align: center; padding: 20px 0;">
+              ${block.seconds}s
+            </div>
+          `;
+        } else if (block.type === 'motion') {
+          content = `
+            <div class="block-header">
+              <span>Motion</span>
+            </div>
+            <div class="block-content" style="font-size: 16px; text-align: center; padding: 15px 0;">
+              ${block.displayName}
+            </div>
+          `;
+        }
+
+        blockEl.innerHTML = content + `
+          <div class="block-actions">
+            <button class="delete-btn" onclick="deleteBlock(${block.id})">Delete</button>
+          </div>
+        `;
+
+        // Drag and drop
+        blockEl.addEventListener('dragstart', (e) => {
+          e.dataTransfer.effectAllowed = 'move';
+          e.dataTransfer.setData('text/html', index);
+          blockEl.classList.add('dragging');
+        });
+
+        blockEl.addEventListener('dragend', () => {
+          blockEl.classList.remove('dragging');
+        });
+
+        blockEl.addEventListener('dragover', (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = 'move';
+        });
+
+        blockEl.addEventListener('drop', (e) => {
+          e.preventDefault();
+          const fromIndex = parseInt(e.dataTransfer.getData('text/html'));
+          const toIndex = parseInt(blockEl.dataset.index);
+
+          if (fromIndex !== toIndex) {
+            const movedBlock = timelineBlocks.splice(fromIndex, 1)[0];
+            timelineBlocks.splice(toIndex, 0, movedBlock);
+            renderTimeline();
+          }
+        });
+
+        timeline.appendChild(blockEl);
+      });
+    }
+
+    async function playTimeline() {
+      if (timelineBlocks.length === 0) {
+        alert("Timeline is empty! Add some blocks first.");
+        return;
+      }
+
+      if (isPlaying) {
+        alert("Timeline is already playing!");
+        return;
+      }
+
+      isPlaying = true;
+      playbackAborted = false;
+      document.getElementById("playTimeline").disabled = true;
+
+      for (let i = 0; i < timelineBlocks.length; i++) {
+        if (playbackAborted) break;
+
+        const block = timelineBlocks[i];
+
+        if (block.type === 'text') {
+          const params = new URLSearchParams({
+            text: block.text,
+            fontSize: block.fontSize,
+            color: block.color
+          });
+          await fetch("/send?" + params.toString());
+        } else if (block.type === 'speech') {
+          await fetch("/speak", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: block.text })
+          });
+          const wordCount = block.text.split(' ').length;
+          await new Promise(resolve => setTimeout(resolve, wordCount * 500));
+        } else if (block.type === 'image') {
+          await fetch("/send-image", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ imageData: block.imageData })
+          });
+        } else if (block.type === 'delay') {
+          await new Promise(resolve => setTimeout(resolve, block.seconds * 1000));
+        } else if (block.type === 'motion') {
+          await fetch('/motion', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ motion: block.motion })
+          });
+          await new Promise(resolve => setTimeout(resolve, 4000));
+        }
+
+        if (i < timelineBlocks.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 300));
+        }
+      }
+
+      isPlaying = false;
+      document.getElementById("playTimeline").disabled = false;
+
+      if (!playbackAborted) {
+        alert("Timeline playback complete!");
+      }
+    }
+
+    function stopTimeline() {
+      playbackAborted = true;
+      isPlaying = false;
+      document.getElementById("playTimeline").disabled = false;
+      clearScreen();
+    }
+
+    function clearTimelineBlocks() {
+      if (isPlaying) {
+        alert("Cannot clear timeline while playing!");
+        return;
+      }
+      if (timelineBlocks.length === 0) return;
+
+      if (confirm("Are you sure you want to clear all timeline blocks?")) {
+        timelineBlocks = [];
+        renderTimeline();
+      }
+    }
+
+    function exportTimeline() {
+      if (timelineBlocks.length === 0) {
+        alert("Timeline is empty! Add some blocks before exporting.");
+        return;
+      }
+
+      const name = prompt("Enter a name for this timeline:", "my_timeline");
+      if (!name) return;
+
+      const sanitizedName = name.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+      const exportData = {
+        name: name,
+        exportedAt: new Date().toISOString(),
+        blocks: timelineBlocks
+      };
+
+      const jsonString = JSON.stringify(exportData, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = sanitizedName + '.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+
+    function importTimeline(file) {
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const importData = JSON.parse(e.target.result);
+
+          if (!importData.blocks || !Array.isArray(importData.blocks)) {
+            alert("Invalid timeline file: missing blocks array");
+            return;
+          }
+
+          const validTypes = ['speech', 'text', 'image', 'delay', 'motion'];
+          const validBlocks = importData.blocks.filter(block => {
+            return block && block.type && validTypes.includes(block.type) && block.id;
+          });
+
+          if (validBlocks.length === 0) {
+            alert("No valid timeline blocks found in the file");
+            return;
+          }
+
+          if (timelineBlocks.length > 0) {
+            if (!confirm(`This will replace your current timeline (${timelineBlocks.length} blocks). Continue?`)) {
+              return;
+            }
+          }
+
+          timelineBlocks = validBlocks;
+          renderTimeline();
+          alert(`Timeline "${importData.name || 'Untitled'}" imported successfully with ${validBlocks.length} blocks!`);
+        } catch (error) {
+          alert("Failed to parse timeline file: " + error.message);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // Event listeners
+    document.getElementById("connectBtn").addEventListener("click", toggleConnection);
+    document.getElementById("detectIpBtn").addEventListener("click", handleDetectIp);
+
+    // Host IP dropdown
+    document.getElementById("hostSelect").addEventListener("change", (e) => {
+      const customInput = document.getElementById("hostIp");
+      if (e.target.value === "custom-host") {
+        customInput.style.display = "block";
+        customInput.value = "";
+        customInput.focus();
+      } else if (e.target.value) {
+        customInput.style.display = "none";
+        customInput.value = e.target.value;
+      } else {
+        customInput.style.display = "none";
+        customInput.value = "";
+      }
+    });
+
+    // Pepper robot dropdown
+    document.getElementById("pepperSelect").addEventListener("change", (e) => {
+      const customInput = document.getElementById("pepperIp");
+      if (e.target.value === "custom") {
+        customInput.classList.add("visible");
+        customInput.focus();
+      } else {
+        customInput.classList.remove("visible");
+      }
+    });
+
+    document.getElementById("speakBtn").addEventListener("click", speak);
+
+    document.getElementById("speechText").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") speak();
+    });
+
+    document.getElementById("send").addEventListener("click", send);
+    document.getElementById("clear").addEventListener("click", clearScreen);
+
+    document.getElementById("colorPicker").addEventListener("change", (e) => {
+      currentColor = e.target.value;
+    });
+
+    document.getElementById("increaseSize").addEventListener("click", () => {
+      currentFontSize += 10;
+      if (currentFontSize > 300) currentFontSize = 300;
+      document.getElementById("fontSizeDisplay").textContent = currentFontSize + "px";
+    });
+
+    document.getElementById("decreaseSize").addEventListener("click", () => {
+      currentFontSize -= 10;
+      if (currentFontSize < 20) currentFontSize = 20;
+      document.getElementById("fontSizeDisplay").textContent = currentFontSize + "px";
+    });
+
+    // Image upload handlers
+    const dropZone = document.getElementById("dropZone");
+    const imageInput = document.getElementById("imageInput");
+
+    dropZone.addEventListener("click", () => imageInput.click());
+
+    imageInput.addEventListener("change", (e) => {
+      if (e.target.files.length > 0) {
+        handleImageFile(e.target.files[0]);
+      }
+    });
+
+    dropZone.addEventListener("dragover", (e) => {
+      e.preventDefault();
+      dropZone.style.borderColor = "#c62828";
+      dropZone.style.backgroundColor = "rgba(244, 67, 54, 0.1)";
+    });
+
+    dropZone.addEventListener("dragleave", (e) => {
+      e.preventDefault();
+      dropZone.style.borderColor = "#f44336";
+      dropZone.style.backgroundColor = "rgba(255,255,255,0.5)";
+    });
+
+    dropZone.addEventListener("drop", (e) => {
+      e.preventDefault();
+      dropZone.style.borderColor = "#f44336";
+      dropZone.style.backgroundColor = "rgba(255,255,255,0.5)";
+
+      if (e.dataTransfer.files.length > 0) {
+        handleImageFile(e.dataTransfer.files[0]);
+      }
+    });
+
+    document.getElementById("sendImage").addEventListener("click", sendImage);
+    document.getElementById("clearImage").addEventListener("click", clearImage);
+
+    document.getElementById("msg").addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send();
+      if (e.key === "Escape") clearScreen();
+    });
+
+    // Timeline event listeners
+    document.getElementById("addSpeechBlock").addEventListener("click", addSpeechBlock);
+    document.getElementById("addTextBlock").addEventListener("click", addTextBlock);
+    document.getElementById("addImageBlock").addEventListener("click", addImageBlock);
+    document.getElementById("addDelayBlock").addEventListener("click", addDelayBlock);
+    document.getElementById("addMotionBlock").addEventListener("click", addMotionBlock);
+    document.getElementById("playTimeline").addEventListener("click", playTimeline);
+    document.getElementById("stopTimeline").addEventListener("click", stopTimeline);
+    document.getElementById("clearTimeline").addEventListener("click", clearTimelineBlocks);
+    document.getElementById("exportTimeline").addEventListener("click", exportTimeline);
+    document.getElementById("importTimelineBtn").addEventListener("click", () => {
+      document.getElementById("importTimelineInput").click();
+    });
+    document.getElementById("importTimelineInput").addEventListener("change", (e) => {
+      if (e.target.files.length > 0) {
+        importTimeline(e.target.files[0]);
+        e.target.value = "";
+      }
+    });
+
+    // Motion event listeners
+    document.getElementById("playMotionBtn").addEventListener("click", playMotion);
+    document.getElementById("stopMotionBtn").addEventListener("click", stopMotion);
+
+    document.getElementById("motionSelect").addEventListener("change", () => {
+      updateFavoriteButton(
+        document.getElementById("motionSelect"),
+        document.getElementById("favoriteMotionBtn")
+      );
+    });
+
+    document.getElementById("favoriteMotionBtn").addEventListener("click", () => {
+      toggleFavorite(
+        document.getElementById("motionSelect").value,
+        document.getElementById("favoriteMotionBtn")
+      );
+    });
+
+    document.getElementById("timelineMotionSelect").addEventListener("change", () => {
+      updateFavoriteButton(
+        document.getElementById("timelineMotionSelect"),
+        document.getElementById("timelineFavoriteMotionBtn")
+      );
+    });
+
+    document.getElementById("timelineFavoriteMotionBtn").addEventListener("click", () => {
+      toggleFavorite(
+        document.getElementById("timelineMotionSelect").value,
+        document.getElementById("timelineFavoriteMotionBtn")
+      );
+    });
+
+    document.getElementById("filterAll").addEventListener("click", () => filterMotions(false));
+    document.getElementById("filterFavorites").addEventListener("click", () => filterMotions(true));
+
+    // Robot control event listeners
+    document.getElementById("wakeUpBtn").addEventListener("click", wakeUpRobot);
+    document.getElementById("stopMotionBtn2").addEventListener("click", stopMotion);
+    document.getElementById("emergencyStopBtn").addEventListener("click", emergencyStop);
+  </script>
+</body>
+</html>
