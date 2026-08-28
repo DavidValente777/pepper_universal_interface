@@ -1,9 +1,15 @@
+# /// script
+# requires-python = ">=3.12,<3.13"
+# dependencies = [
+#     "qi==3.1.5",
+# ]
+# ///
 import argparse
+import threading
 import qi
 import json
 import base64
 import html as html_module
-import os
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
@@ -19,13 +25,8 @@ animation_player = None
 motion = None
 behavior_manager = None
 app = None
-DISPLAY_URL_BASE = None
 is_connected = False
-reconnect_lock = False  # prevent concurrent reconnect attempts
-
-# Get the directory where the script is located
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-
+reconnect_lock = threading.Lock()  # prevents concurrent reconnect attempts
 
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -35,7 +36,7 @@ class Handler(SimpleHTTPRequestHandler):
         SimpleHTTPRequestHandler.end_headers(self)
 
     def do_GET(self):
-        global tablet, DISPLAY_URL_BASE, is_connected, HOST_IP, PEPPER_IP
+        global tablet, is_connected, HOST_IP, PEPPER_IP
 
         parsed = urlparse(self.path)
 
@@ -70,14 +71,6 @@ class Handler(SimpleHTTPRequestHandler):
             fontSize = qs.get("fontSize", ["110"])[0]
             color = qs.get("color", ["#000000"])[0]
 
-            # Clean up any previous image
-            for old_file in os.listdir(os.getcwd()):
-                if old_file.startswith("temp_pepper_image_"):
-                    try:
-                        os.remove(os.path.join(os.getcwd(), old_file))
-                    except Exception:
-                        pass
-
             # Build minimal HTML and send as a data URI so Pepper's tablet
             # does not need to make an HTTP request back to this server.
             safe_text = html_module.escape(text)
@@ -105,7 +98,7 @@ class Handler(SimpleHTTPRequestHandler):
         return SimpleHTTPRequestHandler.do_GET(self)
 
     def do_POST(self):
-        global tablet, tts, DISPLAY_URL_BASE, is_connected, PEPPER_IP, HOST_IP, app, motion
+        global tablet, tts, is_connected, PEPPER_IP, HOST_IP, app, motion
 
         # Handle connection request
         if self.path == "/connect":
@@ -127,7 +120,6 @@ class Handler(SimpleHTTPRequestHandler):
                 # Update global variables
                 PEPPER_IP = pepper_ip
                 HOST_IP = host_ip
-                DISPLAY_URL_BASE = f"http://{host_ip}:{HTTP_PORT}"
 
                 # Connect to Pepper
                 connect_pepper()
@@ -386,10 +378,9 @@ def ensure_connected():
         pass
 
     # Session is dead — attempt reconnect
-    if reconnect_lock:
+    if not reconnect_lock.acquire(blocking=False):
         return False  # another thread is already reconnecting
 
-    reconnect_lock = True
     print("Connection lost — attempting auto-reconnect...")
     try:
         connect_pepper()
@@ -400,7 +391,7 @@ def ensure_connected():
         is_connected = False
         return False
     finally:
-        reconnect_lock = False
+        reconnect_lock.release()
 
 
 def connect_pepper():
@@ -409,7 +400,7 @@ def connect_pepper():
     # Clean up old session if any
     app = None
 
-    app = qi.Application(["pepper_text_server", f"--qi-url=tcp://{PEPPER_IP}:{PEPPER_PORT}"])
+    app = qi.Application(["bridge", f"--qi-url=tcp://{PEPPER_IP}:{PEPPER_PORT}"])
     app.start()
     session = app.session
 
