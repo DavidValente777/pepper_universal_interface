@@ -10,7 +10,11 @@ import time
 import qi
 import json
 import re
+import array
 import base64
+import colorsys
+import struct
+import zlib
 import html as html_module
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
@@ -28,6 +32,8 @@ motion = None
 behavior_manager = None
 audio_device = None
 memory = None
+battery = None
+video_device = None
 app = None
 is_connected = False
 reconnect_lock = threading.Lock()  # prevents concurrent (re)connect attempts
@@ -48,6 +54,8 @@ last_connection_error = None
 # the \vct=N\ TTS tag, since ALTextToSpeech's pitchShift parameter can only
 # raise the pitch, never lower it.
 voice_pitch = 100
+
+BATTERY_CURRENT_KEY = "Device/SubDeviceList/Battery/Current/Sensor/Value"
 
 # Behaviors started via /motion, so /stop-motion can stop them
 launched_behaviors = set()
@@ -74,6 +82,36 @@ drive_lock = threading.Lock()
 drive_active = False
 drive_last_command = 0.0
 drive_started = 0.0
+
+# Camera feed. The browser fetches /camera frame by frame; the bridge keeps
+# the feed's ALVideoDevice subscriptions open while frames are being asked
+# for and releases them after CAMERA_IDLE_TIMEOUT seconds without a request.
+CAMERA_RESOLUTION = 1      # kQVGA, 320x240 (higher costs a lot of Wi-Fi bandwidth)
+CAMERA_FPS = 15
+CAMERA_IDLE_TIMEOUT = 5.0
+CAMERA_SUBSCRIBER = "pepper_controller"
+RGB_SPACE = 11             # kRGBColorSpace
+DEPTH_SPACE = 17           # kDepthColorSpace, millimetres
+INFRARED_SPACE = 20        # 10-bit infrared intensity
+# Feed id (the ?cam= value) -> (label, [(NAOqi camera index, colour space), ...]).
+# The eyes' 3D sensor (index 2) gives 16-bit infrared and depth images whose
+# pixels line up, so the colour feed combines the two.
+CAMERAS = {
+    0: ("top (forehead)", [(0, RGB_SPACE)]),
+    1: ("bottom (mouth)", [(1, RGB_SPACE)]),
+    2: ("eyes infrared", [(2, INFRARED_SPACE)]),
+    3: ("eyes depth", [(2, DEPTH_SPACE)]),
+    4: ("eyes infrared + distance colour", [(2, INFRARED_SPACE), (2, DEPTH_SPACE)]),
+}
+NAOQI_CAMERA_NAMES = {0: "top (forehead)", 1: "bottom (mouth)", 2: "eyes 3D sensor"}
+# Depth shown as greyscale (near bright, far dark) or as colour (near red,
+# far blue); unknown depth (0) is black, or plain infrared in the colour feed
+DEPTH_NEAR_MM = 300
+DEPTH_FAR_MM = 4500
+camera_lock = threading.Lock()
+camera_handles = []        # subscriptions of the open feed, in CAMERAS order
+camera_index = None        # feed id they belong to
+camera_last_used = 0.0
 
 
 def clamp(value, low, high):
@@ -113,9 +151,17 @@ class Handler(SimpleHTTPRequestHandler):
         # Return connection status (actually verifies the qi session is alive)
         if parsed.path == "/status":
             awake = None
+            battery_level = None
+            charging = None
             if is_connected and ensure_connected():
                 try:
                     awake = bool(motion.robotIsWakeUp(_async=True).value(1000))
+                except Exception:
+                    pass
+                try:
+                    battery_level = int(battery.getBatteryCharge(_async=True).value(1000))
+                    # Current is positive while charging, negative while discharging
+                    charging = float(memory.getData(BATTERY_CURRENT_KEY, _async=True).value(1000)) > 0
                 except Exception:
                     pass
 
@@ -127,6 +173,8 @@ class Handler(SimpleHTTPRequestHandler):
                 "reconnecting": want_connected and not is_connected,
                 "attempts": reconnect_attempts,
                 "awake": awake,
+                "battery": battery_level,
+                "charging": charging,
                 "lastError": last_connection_error,
                 "hostIp": HOST_IP,
                 "pepperIp": PEPPER_IP
@@ -192,6 +240,29 @@ class Handler(SimpleHTTPRequestHandler):
             self.send_json(200, settings)
             return
 
+        # One camera frame as PNG: /camera?cam=<feed id from CAMERAS>
+        if parsed.path == "/camera":
+            if not self.require_connection_json():
+                return
+            try:
+                cam = int(parse_qs(parsed.query).get("cam", ["0"])[0])
+            except ValueError:
+                cam = -1
+            if cam not in CAMERAS:
+                self.send_json(400, {"success": False, "error": "cam must be one of " + ", ".join(map(str, CAMERAS))})
+                return
+            try:
+                png = camera_frame_png(cam)
+            except Exception as e:
+                self.send_json(500, {"success": False, "error": f"Camera: {e}"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(png)))
+            self.end_headers()
+            self.wfile.write(png)
+            return
+
         # Default: serve files normally
         return SimpleHTTPRequestHandler.do_GET(self)
 
@@ -248,6 +319,7 @@ class Handler(SimpleHTTPRequestHandler):
         if self.path == "/disconnect":
             want_connected = False
             stop_driving()
+            release_camera()
             try:
                 if is_connected:
                     set_obstacle_avoidance(True)  # leave the robot in its safe default
@@ -470,7 +542,8 @@ class Handler(SimpleHTTPRequestHandler):
                 message = str(e)
                 if "without first enabling" in message:
                     message = ("Pepper refused: switching off obstacle avoidance is not allowed on this robot. "
-                               "Allow deactivation of safety reflexes in the robot's settings first.")
+                               "Tick \"Permit deactivation of the safety reflexes\" at "
+                               f"http://{PEPPER_IP}/apps/robots_advanced/#/settings first.")
                 self.send_json(409, {"success": False, "error": message})
             return
 
@@ -482,6 +555,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200, {"success": True})
             except Exception as e:
                 self.send_json(500, {"success": False, "error": str(e)})
+            return
+
+        if self.path == "/camera-stop":
+            release_camera()
+            self.send_json(200, {"success": True})
             return
 
         if self.path == "/stop-speech":
@@ -704,6 +782,205 @@ def drive_watchdog():
             stop_driving()
 
 
+def encode_png(width, height, pixels, channels=3):
+    """Minimal RGB (3) or greyscale (1) PNG encoder (keeps the bridge free of image libraries)."""
+    stride = width * channels
+    raw = b"".join(b"\x00" + pixels[y * stride:(y + 1) * stride] for y in range(height))
+
+    def chunk(kind, data):
+        body = kind + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    color_type = 2 if channels == 3 else 0
+    header = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
+
+
+def unsubscribe_camera():
+    """Drop the current subscriptions (caller holds camera_lock)."""
+    global camera_handles, camera_index
+    if video_device is not None:
+        for handle in camera_handles:
+            try:
+                video_device.unsubscribe(handle)
+            except Exception as e:
+                print(f"Warning: Could not release camera: {e}")
+    camera_handles = []
+    camera_index = None
+
+
+def release_camera():
+    with camera_lock:
+        unsubscribe_camera()
+
+
+def release_stale_subscriptions():
+    """Unsubscribe "pepper_controller_N" subscriptions this bridge doesn't hold.
+
+    NAOqi keeps a subscription until it is explicitly released, even after the
+    client is gone (bridge stopped, session dropped), and allows at most 7 per
+    name, so leftovers eventually block every new subscription."""
+    stale = [name for name in video_device.getSubscribers()
+             if name.startswith(CAMERA_SUBSCRIBER + "_") and name not in camera_handles]
+    for name in stale:
+        try:
+            video_device.unsubscribe(name)
+        except Exception as e:
+            print(f"Warning: Could not release old camera subscription {name}: {e}")
+    if stale:
+        print(f"Released {len(stale)} leftover camera subscription(s)")
+    return bool(stale)
+
+
+def subscribe_feed(cam):
+    """Open every stream feed `cam` needs (caller holds camera_lock)."""
+    global camera_handles, camera_index
+    label, streams = CAMERAS[cam]
+    for index, color_space in streams:
+        subscribe = lambda: video_device.subscribeCamera(
+            CAMERA_SUBSCRIBER, index, CAMERA_RESOLUTION, color_space, CAMERA_FPS)
+        handle = subscribe()
+        # NAOqi 2.5 returns "" instead of raising when it refuses a subscription
+        if not handle and release_stale_subscriptions():
+            handle = subscribe()
+        if not handle:
+            unsubscribe_camera()
+            indexes = video_device.getCameraIndexes()
+            if index in indexes:
+                raise RuntimeError(f"Pepper refused to open the {label} camera - try again, or reboot Pepper")
+            # e.g. the head's camera board isn't detected
+            available = ", ".join(NAOQI_CAMERA_NAMES.get(i, f"#{i}") for i in indexes)
+            raise RuntimeError(f"the {label} camera is not available on the robot "
+                               f"(NAOqi sees only: {available or 'none'}) - try rebooting Pepper")
+        camera_handles.append(handle)
+    camera_index = cam
+
+
+def grab_camera_images(cam):
+    """Raw ALVideoDevice images of feed `cam`, one per stream (caller holds camera_lock)."""
+    if camera_handles and camera_index != cam:
+        unsubscribe_camera()
+    resubscribed = False
+    for _ in range(10):  # the first frame after subscribing can take a moment
+        if not camera_handles:
+            subscribe_feed(cam)
+        try:
+            # Asked for in parallel so a two-stream feed waits for Wi-Fi once
+            futures = [video_device.getImageRemote(handle, _async=True) for handle in camera_handles]
+            images = [future.value() for future in futures]
+        except Exception:
+            # Subscription lost (e.g. NAOqi restarted): subscribe again once
+            if resubscribed:
+                raise
+            unsubscribe_camera()
+            resubscribed = True
+            continue
+        if all(images):
+            return images
+        time.sleep(0.05)
+    raise RuntimeError(f"no image from the {CAMERAS[cam][0]} camera")
+
+
+def image_bytes(image):
+    data = image[6]
+    if isinstance(data, (list, tuple)):  # some qi versions return a list of ints
+        return bytes(data)
+    if isinstance(data, str):
+        return data.encode("latin-1")
+    return bytes(data)
+
+
+def camera_frame_png(cam):
+    global camera_last_used
+    with camera_lock:
+        camera_last_used = time.monotonic()
+        images = grab_camera_images(cam)
+    width, height = images[0][0], images[0][1]
+    streams = CAMERAS[cam][1]
+    if streams[0][1] == RGB_SPACE:
+        return encode_png(width, height, image_bytes(images[0]))
+    # 16-bit little-endian, same as the robot
+    planes = [array.array("H", image_bytes(image)) for image in images]
+    if len(planes) == 2:
+        return encode_png(width, height, distance_tinted_infrared(planes[0], planes[1]))
+    values = planes[0]
+    if streams[0][1] == DEPTH_SPACE:
+        grey = bytes(map(DEPTH_LUT.__getitem__, values))
+    else:
+        grey = bytes(map(infrared_lut(values).__getitem__, values))
+    return encode_png(width, height, grey, channels=1)
+
+
+def make_depth_lut():
+    span = DEPTH_FAR_MM - DEPTH_NEAR_MM
+    lut = bytearray(65536)
+    for mm in range(1, 65536):
+        lut[mm] = 255 - min(255, max(0, (mm - DEPTH_NEAR_MM) * 230 // span))
+    return bytes(lut)
+
+
+DEPTH_LUT = make_depth_lut()
+
+
+def infrared_lut(values):
+    """Auto-contrast for the infrared image: stretch the 2nd-98th percentile
+    (taken from a sample of pixels) to the full 0-255 range."""
+    sample = sorted(values[::17])
+    low = sample[len(sample) // 50]
+    high = max(low + 1, sample[-len(sample) // 50 - 1])
+    lut = bytearray(65536)
+    for v in range(low, 65536):
+        lut[v] = min(255, (v - low) * 255 // (high - low))
+    return lut
+
+
+# Distance-tinted infrared: the hue comes from the depth (red near, through
+# yellow and green, to blue far) and the brightness from the infrared image.
+# Both are quantised to 64 levels so each pixel is a single table lookup.
+TINT_LEVELS = 64
+SHADE_LEVELS = 64
+NO_DEPTH_ROW = TINT_LEVELS * SHADE_LEVELS  # pixels without depth stay grey
+
+
+def make_tint_tables():
+    span = DEPTH_FAR_MM - DEPTH_NEAR_MM
+    depth_row = [NO_DEPTH_ROW] + [
+        min(TINT_LEVELS - 1, max(0, (mm - DEPTH_NEAR_MM) * TINT_LEVELS // span)) * SHADE_LEVELS
+        for mm in range(1, 65536)]
+    table = []
+    for tint in range(TINT_LEVELS):
+        r, g, b = colorsys.hsv_to_rgb(tint / (TINT_LEVELS - 1) * 2 / 3, 1.0, 1.0)
+        for shade in range(SHADE_LEVELS):
+            # Never fully black, so the tint stays visible on dark surfaces;
+            # the gamma lifts the mid-tones the speckled infrared lives in
+            k = 255 * (0.45 + 0.55 * (shade / (SHADE_LEVELS - 1)) ** 0.6)
+            table.append(bytes((int(r * k), int(g * k), int(b * k))))
+    for shade in range(SHADE_LEVELS):
+        table.append(bytes([int(255 * (shade / (SHADE_LEVELS - 1)) ** 0.6)] * 3))
+    return depth_row, table
+
+
+DEPTH_TINT_ROW, TINT_TABLE = make_tint_tables()
+
+
+def distance_tinted_infrared(infrared, depth):
+    """RGB pixels from aligned infrared and depth planes of the eyes' sensor."""
+    shade = infrared_lut(infrared)
+    return b"".join([TINT_TABLE[DEPTH_TINT_ROW[d] + (shade[v] >> 2)]
+                     for v, d in zip(infrared, depth)])
+
+
+def camera_idle_monitor():
+    while True:
+        time.sleep(1.0)
+        if camera_handles and time.monotonic() - camera_last_used > CAMERA_IDLE_TIMEOUT:
+            with camera_lock:
+                if camera_handles and time.monotonic() - camera_last_used > CAMERA_IDLE_TIMEOUT:
+                    print("Camera idle - releasing it")
+                    unsubscribe_camera()
+
+
 def stop_all_motions():
     """Stop running animations and behaviors started from /motion.
 
@@ -814,7 +1091,8 @@ def connect_pepper(reconnecting=False):
     not woken up and the tablet brightness is left alone: after a network
     drop Pepper keeps its state, and a robot that was put to rest (e.g. by
     Emergency Stop) must never start moving on its own."""
-    global tablet, tts, animation_player, motion, behavior_manager, audio_device, memory, app, is_connected
+    global tablet, tts, animation_player, motion, behavior_manager, audio_device, memory, battery, video_device, app, is_connected
+    global camera_handles, camera_index
 
     # Clean up old session if any. A plain qi.Session is used rather than
     # qi.Application: only one Application may exist per process, so creating
@@ -842,6 +1120,17 @@ def connect_pepper(reconnecting=False):
     behavior_manager = session.service("ALBehaviorManager")
     audio_device = session.service("ALAudioDevice")
     memory = session.service("ALMemory")
+    battery = session.service("ALBattery")
+    video_device = session.service("ALVideoDevice")
+    # A subscription made over the old session is re-made on the next frame;
+    # the old one (and any left by an earlier bridge) is released on the robot
+    with camera_lock:
+        camera_handles = []
+        camera_index = None
+        try:
+            release_stale_subscriptions()
+        except Exception as e:
+            print(f"Warning: Could not check old camera subscriptions: {e}")
 
     if not reconnecting:
         try:
@@ -938,6 +1227,7 @@ def main():
     server = ThreadingHTTPServer(("0.0.0.0", args.http_port), Handler)
     threading.Thread(target=drive_watchdog, daemon=True).start()
     threading.Thread(target=connection_monitor, daemon=True).start()
+    threading.Thread(target=camera_idle_monitor, daemon=True).start()
 
     print(f"=" * 50)
     print(f"Pepper Controller Server")
@@ -948,7 +1238,14 @@ def main():
     print(f"Use the web interface to connect to Pepper.")
     print(f"=" * 50)
 
-    server.serve_forever()
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print("\nStopping - releasing the camera")
+    finally:
+        # Pepper keeps subscriptions of a stopped bridge until they are released
+        if is_connected:
+            release_camera()
 
 
 if __name__ == "__main__":
