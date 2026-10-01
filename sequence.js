@@ -59,8 +59,31 @@ function moveBlockToGap(steps, id, gapIndex) {
   return next.filter((step) => step.length > 0);
 }
 
+// Returns the cleaned block (delay seconds as a number), or null when the
+// block is not something the page can safely render and play
+function validateBlock(block) {
+  if (!block || typeof block !== "object" || !VALID_BLOCK_TYPES.includes(block.type)) return null;
+  switch (block.type) {
+    case "speech":
+    case "text":
+      return typeof block.text === "string" ? block : null;
+    case "motion":
+      return typeof block.motion === "string" ? block : null;
+    case "image":
+      return typeof block.imageData === "string" && block.imageData.startsWith("data:image/") ? block : null;
+    case "delay": {
+      if (typeof block.seconds !== "number" && typeof block.seconds !== "string") return null;
+      if (typeof block.seconds === "string" && block.seconds.trim() === "") return null;
+      const seconds = Number(block.seconds);
+      return Number.isFinite(seconds) && seconds >= 0 ? { ...block, seconds } : null;
+    }
+    default:
+      return null;
+  }
+}
+
 function isValidBlock(block) {
-  return !!block && typeof block === "object" && VALID_BLOCK_TYPES.includes(block.type);
+  return validateBlock(block) !== null;
 }
 
 // Keeps the first block of each channel; every other block gets its own step
@@ -95,7 +118,10 @@ function parseTimelineFile(data, makeId) {
   const steps = [];
   let movedCount = 0;
   rawSteps.forEach((rawStep) => {
-    const blocks = rawStep.filter(isValidBlock).map((block) => ({ ...block, id: makeId() }));
+    const blocks = rawStep
+      .map(validateBlock)
+      .filter(Boolean)
+      .map((block) => ({ ...block, id: makeId() }));
     if (blocks.length === 0) return;
     const parts = splitConflicts(blocks);
     movedCount += parts.length - 1;
@@ -103,7 +129,7 @@ function parseTimelineFile(data, makeId) {
   });
   if (steps.length === 0) throw new Error("No valid blocks found in this file.");
   const blockCount = steps.reduce((count, step) => count + step.length, 0);
-  return { name: data.name || "Untitled", steps, blockCount, movedCount };
+  return { name: typeof data.name === "string" && data.name ? data.name : "Untitled", steps, blockCount, movedCount };
 }
 
 if (typeof module !== "undefined") {
