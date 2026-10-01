@@ -1279,7 +1279,7 @@ function blockContentHtml(block) {
   if (block.type === "delay") {
     return `
       <div class="block-header"><span>Wait</span></div>
-      <div class="block-content">${block.seconds} second${block.seconds === 1 ? "" : "s"}</div>`;
+      <div class="block-content">${escapeHtml(String(block.seconds))} second${block.seconds === 1 ? "" : "s"}</div>`;
   }
   if (block.type === "motion") {
     return `
@@ -1516,7 +1516,7 @@ async function runBlock(block) {
 }
 
 // Runs one block of the current step; never rejects, so a step can wait for all
-async function runStepBlock(block) {
+async function runStepBlock(block, stepNumber) {
   setBlockState(block, "playing");
   try {
     await runBlock(block);
@@ -1526,6 +1526,7 @@ async function runStepBlock(block) {
       return null;
     }
     setBlockState(block, "error", error.message);
+    logError(`Timeline step ${stepNumber} (${block.type})`, error.message);
     return error;
   }
   setBlockState(block, playbackAborted ? "stopped" : "done");
@@ -1570,13 +1571,12 @@ async function playTimeline() {
     setTimelineStatus("playing", `Playing step ${i + 1} of ${total}: ${step.map(describeBlock).join(" + ")}`, i / total);
 
     // Every block of the step starts now; the step ends when all have finished
-    const errors = await Promise.all(step.map(runStepBlock));
+    const errors = await Promise.all(step.map((block) => runStepBlock(block, i + 1)));
     if (playbackAborted) break;
 
-    const failures = step.map((block, k) => [block, errors[k]]).filter(([, error]) => error);
-    if (failures.length > 0) {
-      failures.forEach(([block, error]) => logError(`Timeline step ${i + 1} (${block.type})`, error.message));
-      failed = { index: i, message: failures[0][1].message };
+    const firstError = errors.find(Boolean);
+    if (firstError) {
+      failed = { index: i, message: firstError.message };
       break;
     }
     completed = i + 1;
@@ -1590,9 +1590,6 @@ async function playTimeline() {
   if (failed) {
     setTimelineStatus("error", `Failed at step ${failed.index + 1} of ${total}: ${failed.message}`, completed / total);
   } else if (playbackAborted) {
-    steps.flat().forEach((block) => {
-      if (blockStates[block.id] && blockStates[block.id].state === "playing") setBlockState(block, "stopped");
-    });
     setTimelineStatus("stopped", `Stopped after ${completed} of ${total} steps`, completed / total);
   } else {
     setTimelineStatus("done", `Finished — all ${total} steps played`, 1);

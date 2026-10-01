@@ -823,6 +823,11 @@ button:hover {
 .timeline-gap.edge {
   width: 16px;
 }
+/* The drop zone after the last step fills the free width of the timeline */
+.timeline-gap.edge:last-child {
+  flex-grow: 1;
+  justify-content: flex-start;
+}
 .timeline-gap svg {
   width: 28px;
   height: 14px;
@@ -848,6 +853,10 @@ button:hover {
   margin-left: -1.5px;
   border-radius: 2px;
   background: var(--primary);
+}
+.timeline-gap.edge:last-child.drop-target::after {
+  left: 8px;
+  margin-left: 0;
 }
 
 .block-header {

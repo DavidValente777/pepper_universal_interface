@@ -305,3 +305,44 @@ test("a malformed file is rejected and the timeline is left alone", async () => 
   assert.deepEqual(result.shape, [["speech"]]);
   assert.equal(result.message, "No valid blocks found in this file.");
 });
+
+test("an imported delay with script in seconds is dropped and never runs", async () => {
+  const result = await page.evaluate(`
+    __t.load(${JSON.stringify([[SPEECH]])});
+    ${IMPORT(JSON.stringify({ name: "evil", steps: [[{ type: "delay", seconds: "<img src=x onerror=window.__pwned=1>" }]] }))}
+    await new Promise((r) => setTimeout(r, 100));
+    return { shape: __t.shape(), message, pwned: window.__pwned };`);
+  assert.deepEqual(result.shape, [["speech"]]);
+  assert.equal(result.message, "No valid blocks found in this file.");
+  assert.equal(result.pwned, undefined);
+});
+
+test("a failure in a step that is then stopped still reaches the Error Log", async () => {
+  const result = await page.evaluate(`
+    document.getElementById("errorLogEntries").innerHTML = "";
+    __bridge.delays = { "/speak": 10000 }; __bridge.failures = { "/motion": "motion broke" };
+    const ids = __t.load(${JSON.stringify([[MOTION, SPEECH]])});
+    const playing = playTimeline();
+    await new Promise((r) => setTimeout(r, 200));
+    await stopTimeline();
+    await playing;
+    __bridge.delays = {}; __bridge.failures = {};
+    return {
+      log: document.getElementById("errorLogEntries").textContent,
+      states: ids.flat().map(${stateOf}),
+      status: document.getElementById("timelineStatusText").textContent,
+    };`);
+  assert.match(result.log, /Timeline step 1 \(motion\)/);
+  assert.match(result.log, /motion broke/);
+  assert.deepEqual(result.states, ["error", "stopped"]);
+  assert.equal(result.status, "Stopped after 0 of 1 steps");
+});
+
+test("the gap after the last step grows to take the free width", async () => {
+  const widths = await page.evaluate(`
+    __t.load(${JSON.stringify([[SPEECH]])});
+    const gaps = [...document.querySelectorAll("#timeline .timeline-gap")];
+    return gaps.map((g) => g.getBoundingClientRect().width);`);
+  assert.ok(widths[0] <= 20, `first edge ${widths[0]}`);
+  assert.ok(widths[1] > 100, `last edge ${widths[1]}`);
+});

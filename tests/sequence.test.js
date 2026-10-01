@@ -138,3 +138,43 @@ test("parseTimelineFile rejects malformed files with a clear message", () => {
   assert.throws(() => seq.parseTimelineFile(null, makeId), { message: "Invalid file — no steps or blocks found." });
   assert.throws(() => seq.parseTimelineFile({ steps: [] }, makeId), { message: "No valid blocks found in this file." });
 });
+
+const parseBlocks = (blocks, extra = {}) => seq.parseTimelineFile({ blocks, ...extra }, makeId);
+const noValid = /No valid blocks/;
+
+test("import drops delay blocks with a bad seconds value", () => {
+  for (const seconds of ["<img src=x onerror=alert(1)>", undefined, -1, NaN, null, "", {}]) {
+    assert.throws(() => parseBlocks([{ type: "delay", seconds }]), noValid, String(seconds));
+  }
+});
+
+test("import accepts numeric-string seconds and stores a number", () => {
+  const parsed = parseBlocks([{ type: "delay", seconds: "3" }]);
+  assert.strictEqual(parsed.steps[0][0].seconds, 3);
+  assert.strictEqual(parseBlocks([{ type: "delay", seconds: 0 }]).steps[0][0].seconds, 0);
+});
+
+test("import drops blocks missing their required fields", () => {
+  assert.throws(() => parseBlocks([{ type: "speech" }]), noValid);
+  assert.throws(() => parseBlocks([{ type: "speech", text: 5 }]), noValid);
+  assert.throws(() => parseBlocks([{ type: "text" }]), noValid);
+  assert.throws(() => parseBlocks([{ type: "motion" }]), noValid);
+  assert.throws(() => parseBlocks([{ type: "image" }]), noValid);
+});
+
+test("import only accepts image data URLs", () => {
+  assert.throws(() => parseBlocks([{ type: "image", imageData: "http://example.com/a.png" }]), noValid);
+  assert.equal(parseBlocks([image(1)]).blockCount, 1);
+});
+
+test("import keeps valid blocks and drops invalid ones beside them", () => {
+  const parsed = parseBlocks([speech(1), { type: "delay", seconds: "x" }, motion(2)]);
+  assert.equal(parsed.blockCount, 2);
+});
+
+test("import uses the file name only when it is a non-empty string", () => {
+  assert.equal(parseBlocks([speech(1)], { name: { a: 1 } }).name, "Untitled");
+  assert.equal(parseBlocks([speech(1)], { name: "" }).name, "Untitled");
+  assert.equal(parseBlocks([speech(1)], { name: 7 }).name, "Untitled");
+  assert.equal(parseBlocks([speech(1)], { name: "mine" }).name, "mine");
+});
