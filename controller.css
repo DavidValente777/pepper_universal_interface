@@ -501,6 +501,8 @@ button:hover {
 }
 .motion-select-wrapper select {
   flex: 1;
+  min-width: 0; /* long motion names must not widen the card */
+  width: 100%;
   font-size: 16px;
   padding: 10px 12px;
   border: 1px solid var(--input-border);
@@ -716,4 +718,336 @@ button:hover {
   font-size: 14px;
   padding: 6px 14px;
   margin-top: 12px;
+}
+
+/* ─── Clear tablet + robot sliders ─── */
+.clear-tablet-btn {
+  display: block;
+  width: 100%;
+  margin-top: 18px;
+  padding: 22px 24px;
+  font-size: 24px;
+  letter-spacing: 0.5px;
+  border-radius: 10px;
+  background-color: #1e293b; /* same as the app bar */
+}
+.robot-sliders {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px 28px;
+  margin-top: 20px;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.slider-group label {
+  display: flex;
+  justify-content: space-between;
+  font-size: 15px;
+  color: var(--text-2);
+  margin-bottom: 6px;
+}
+.slider-value {
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.slider-group input[type="range"] {
+  width: 100%;
+  padding: 0;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+.slider-group input[type="range"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* ─── Motion list status ─── */
+.motion-list-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: -6px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.motion-list-status button {
+  background-color: var(--neutral);
+  font-size: 13px;
+  padding: 5px 10px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.motion-list-status button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+
+/* ─── Timeline playback status ─── */
+.timeline-controls button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.timeline-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 8px;
+  font-size: 15px;
+  background: #f3f4f6;
+}
+.timeline-status #timelineStatusText {
+  flex: 1;
+  min-width: 200px;
+  overflow-wrap: anywhere;
+}
+.timeline-status-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ca3af;
+  flex-shrink: 0;
+}
+.timeline-progress {
+  width: 160px;
+  height: 6px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+#timelineProgressBar {
+  height: 100%;
+  width: 0;
+  background: var(--primary);
+  transition: width 0.3s;
+}
+.timeline-status.playing { background: rgba(37, 99, 235, 0.1); }
+.timeline-status.playing .timeline-status-dot { background: var(--primary); animation: pulse 1s infinite; }
+.timeline-status.stopping { background: rgba(234, 179, 8, 0.12); }
+.timeline-status.stopping .timeline-status-dot { background: #ca8a04; animation: pulse 0.5s infinite; }
+.timeline-status.done { background: rgba(22, 163, 74, 0.1); }
+.timeline-status.done .timeline-status-dot { background: var(--success); }
+.timeline-status.done #timelineProgressBar { background: var(--success); }
+.timeline-status.stopped { background: rgba(234, 179, 8, 0.12); }
+.timeline-status.stopped .timeline-status-dot { background: #ca8a04; }
+.timeline-status.error { background: rgba(220, 38, 38, 0.1); color: #991b1b; }
+.timeline-status.error .timeline-status-dot { background: var(--danger); }
+.timeline-status.error #timelineProgressBar { background: var(--danger); }
+
+/* Per-block playback state */
+.block-step {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #9ca3af;
+  margin-bottom: 4px;
+  min-height: 18px;
+}
+.block-state-badge:empty {
+  display: none;
+}
+.block-state-badge {
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+.block-error:empty {
+  display: none;
+}
+.block-error {
+  font-size: 12px;
+  color: #991b1b;
+  background: #fef2f2;
+  border-radius: 4px;
+  padding: 4px 6px;
+  margin-bottom: 8px;
+  max-height: 64px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+}
+.block-actions button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.timeline-block {
+  transition: box-shadow 0.2s, transform 0.2s, opacity 0.2s;
+}
+.timeline-block.state-playing {
+  box-shadow: 0 0 0 3px var(--primary), 0 4px 12px rgba(37, 99, 235, 0.3);
+  transform: translateY(-3px);
+}
+.timeline-block.state-playing .block-state-badge {
+  background: var(--primary);
+  color: white;
+  animation: pulse 1s infinite;
+}
+.timeline-block.state-done {
+  opacity: 0.7;
+}
+.timeline-block.state-done .block-state-badge {
+  background: rgba(22, 163, 74, 0.15);
+  color: var(--success-h);
+}
+.timeline-block.state-error {
+  box-shadow: 0 0 0 3px var(--danger);
+}
+.timeline-block.state-error .block-state-badge {
+  background: var(--danger);
+  color: white;
+}
+.timeline-block.state-stopped .block-state-badge {
+  background: rgba(234, 179, 8, 0.2);
+  color: #854d0e;
+}
+#timeline {
+  padding-top: 20px; /* room for the lifted "playing" block */
+}
+
+/* ─── Drive panel ─── */
+.drive-panel {
+  background: var(--bg-card);
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--neutral);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.07);
+  padding: 20px 30px;
+  margin-bottom: 24px;
+  transition: border-color 0.2s;
+}
+.drive-panel.enabled {
+  border-left-color: var(--success);
+}
+.drive-main {
+  display: flex;
+  gap: 32px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.drive-settings {
+  flex: 1;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.drive-toggle {
+  align-self: flex-start;
+  font-size: 18px;
+  padding: 12px 24px;
+  background-color: var(--neutral);
+}
+.drive-toggle.on {
+  background-color: var(--success);
+}
+.drive-toggles {
+  display: flex;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.drive-toggles .drive-toggle {
+  align-self: auto;
+}
+.avoidance-toggle:not(.on) {
+  background-color: var(--danger);
+}
+.drive-toggle:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.drive-warning {
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  background: rgba(220, 38, 38, 0.1);
+  color: #991b1b;
+  border-left: 4px solid var(--danger);
+}
+.drive-warning[hidden] {
+  display: none;
+}
+.drive-hint {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--text-2);
+}
+kbd {
+  display: inline-block;
+  min-width: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--input-border);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: #f9fafb;
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 20px;
+  text-align: center;
+  color: var(--text);
+}
+.drive-status {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 15px;
+  background: #f3f4f6;
+  color: var(--text-2);
+}
+.drive-status::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #9ca3af;
+  flex-shrink: 0;
+}
+.drive-status.ready { background: rgba(22, 163, 74, 0.1); color: var(--text); }
+.drive-status.ready::before { background: var(--success); }
+.drive-status.moving { background: rgba(37, 99, 235, 0.1); color: var(--text); }
+.drive-status.moving::before { background: var(--primary); animation: pulse 1s infinite; }
+.drive-status.error { background: rgba(220, 38, 38, 0.1); color: #991b1b; }
+.drive-status.error::before { background: var(--danger); }
+
+.drive-pad {
+  display: grid;
+  grid-template-columns: repeat(3, 64px);
+  grid-template-rows: repeat(3, 64px);
+  grid-template-areas:
+    ".    up   ."
+    "left stop right"
+    ".    down .";
+  gap: 8px;
+  margin: 0 auto;
+  touch-action: none;
+  user-select: none;
+}
+.drive-key {
+  padding: 0;
+  font-size: 22px;
+  border-radius: 10px;
+  background-color: var(--neutral);
+  transition: background-color 0.1s, transform 0.1s;
+}
+.drive-key.active {
+  background-color: var(--primary);
+  transform: scale(0.94);
+  opacity: 1;
+}
+.drive-key-stop {
+  background-color: var(--danger);
+}
+.drive-panel:not(.enabled) .drive-key {
+  opacity: 0.4;
+  cursor: not-allowed;
 }

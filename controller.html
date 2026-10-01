@@ -67,6 +67,59 @@
           <span class="status-indicator" id="robotStatusIndicator"></span>
           <span id="robotStatusText">Unknown</span>
         </div>
+
+        <button id="clearTabletBtn" class="clear-tablet-btn" title="Remove any text, image, video or webpage from Pepper's tablet">
+          Clear Tablet
+        </button>
+
+        <div class="robot-sliders">
+          <div class="slider-group">
+            <label for="volumeSlider">Volume <span id="volumeValue" class="slider-value">–</span></label>
+            <input type="range" id="volumeSlider" min="0" max="100" step="1" value="50" disabled />
+          </div>
+          <div class="slider-group">
+            <label for="pitchSlider">Voice pitch <span id="pitchValue" class="slider-value">–</span></label>
+            <input type="range" id="pitchSlider" min="50" max="200" step="5" value="100" disabled />
+          </div>
+          <div class="slider-group">
+            <label for="brightnessSlider">Tablet brightness <span id="brightnessValue" class="slider-value">–</span></label>
+            <input type="range" id="brightnessSlider" min="0" max="100" step="1" value="100" disabled />
+          </div>
+        </div>
+      </div>
+
+      <!-- Drive -->
+      <p class="section-label">Drive</p>
+      <div class="drive-panel" id="drivePanel">
+        <div class="drive-main">
+          <div class="drive-settings">
+            <div class="drive-toggles">
+              <button id="driveToggleBtn" class="drive-toggle" aria-pressed="false">Keyboard driving: OFF</button>
+              <button id="avoidanceToggleBtn" class="drive-toggle avoidance-toggle on" aria-pressed="true" disabled
+                title="Pepper's built-in obstacle avoidance while driving. Can only be changed while keyboard driving is on.">Obstacle avoidance: ON</button>
+            </div>
+            <div id="avoidanceWarning" class="drive-warning" hidden>
+              Obstacle avoidance is OFF — Pepper will not stop for people or objects. It turns back on when you switch driving off.
+            </div>
+            <div class="slider-group">
+              <label for="driveSpeedSlider">Speed <span id="driveSpeedValue" class="slider-value">40%</span></label>
+              <input type="range" id="driveSpeedSlider" min="10" max="100" step="5" value="40" />
+            </div>
+            <p class="drive-hint">
+              Hold <kbd>↑</kbd> <kbd>↓</kbd> to drive, <kbd>←</kbd> <kbd>→</kbd> to turn,
+              <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> to slide sideways.
+              Release to stop, <kbd>Space</kbd> stops immediately.
+            </p>
+            <div id="driveStatus" class="drive-status">Off</div>
+          </div>
+          <div class="drive-pad" aria-label="Drive controls">
+            <button class="drive-key" data-key="ArrowUp" title="Forward (↑)" style="grid-area: up">▲</button>
+            <button class="drive-key" data-key="ArrowLeft" title="Turn left (←)" style="grid-area: left">◀</button>
+            <button class="drive-key drive-key-stop" data-key="stop" title="Stop (Space)" style="grid-area: stop">■</button>
+            <button class="drive-key" data-key="ArrowRight" title="Turn right (→)" style="grid-area: right">▶</button>
+            <button class="drive-key" data-key="ArrowDown" title="Backward (↓)" style="grid-area: down">▼</button>
+          </div>
+        </div>
       </div>
 
       <!-- Instant Send -->
@@ -124,7 +177,7 @@
         <!-- Motions Card -->
         <div class="instant-card motion-card">
           <h2><span class="icon">Motions</span></h2>
-          <label>Choose a motion:</label>
+          <label for="motionSelect">Choose a motion:</label>
           <div class="motion-select-wrapper">
             <select id="motionSelect">
               <option value="">-- Select motion --</option>
@@ -155,6 +208,10 @@
                 <option value="animations/Stand/Reactions/TouchHead_1">Touch head</option>
               </optgroup>
             </select>
+          </div>
+          <div class="motion-list-status">
+            <span id="motionListStatus">Built-in list (18 motions)</span>
+            <button id="reloadMotionsBtn" title="Load all animations installed on the robot">Load from robot</button>
           </div>
           <div class="row">
             <button id="playMotionBtn">Play Motion</button>
@@ -245,6 +302,12 @@
           <button id="exportTimeline" class="export">Export</button>
           <button id="importTimelineBtn" class="import">Import</button>
           <input type="file" id="importTimelineInput" accept=".json" />
+        </div>
+
+        <div id="timelineStatus" class="timeline-status idle">
+          <span class="timeline-status-dot"></span>
+          <span id="timelineStatusText">Ready</span>
+          <div class="timeline-progress"><div id="timelineProgressBar"></div></div>
         </div>
 
         <div id="timeline" class="empty"></div>

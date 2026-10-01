@@ -87,11 +87,16 @@ The connection is polled every 5 seconds. If it drops, the server will attempt t
 
 | Feature | Description |
 |---------|-------------|
+| **Clear Tablet** | One big button that removes whatever is on the tablet (text, image, video, webpage) |
+| **Volume / Pitch / Brightness** | Sliders for speaker volume, voice pitch (50–200%) and tablet brightness; they show the robot's current values on connect |
+| **Drive** | Toggle keyboard driving on, then hold ↑/↓ to drive, ←/→ to turn, Shift+←/→ to slide sideways (or hold the on-screen arrows). Release or press Space to stop. Speed is adjustable and capped at 0.35 m/s |
+| **Obstacle avoidance** | Toggle Pepper's built-in obstacle avoidance while driving (asks for confirmation; switches back on automatically when driving is switched off). The robot must allow deactivation of safety reflexes, otherwise it refuses and the page explains why |
+| **Automatic reconnect** | If the connection to Pepper drops, the bridge reconnects on its own (retrying with backoff, even with no browser open). If the bridge itself restarts, the page reconnects it. Reconnects never wake the robot or stop what it is doing |
 | **Speech** | Type text for Pepper to say immediately |
 | **Text Display** | Show text on Pepper's tablet with adjustable font size and colour |
-| **Image Display** | Drag & drop or select a JPG/PNG to display on the tablet |
-| **Motions** | Choose and play one of Pepper's built-in animations |
-| **Sequence Builder** | Build a timeline of speech, text, image, motion, and delay steps; reorder by drag & drop; export/import as JSON |
+| **Image Display** | Drag & drop or select a JPG/PNG; it is shown as large as possible on the tablet (1280×800) without distorting its aspect ratio |
+| **Motions** | Play any animation installed on the robot — the list is loaded from the robot on connect (standard animations plus animations shipped with installed apps; system apps such as shutdown/reboot are excluded) |
+| **Sequence Builder** | Build a timeline of speech, text, image, motion, and delay steps; reorder by drag & drop; export/import as JSON. During playback the current block is highlighted, finished/failed/stopped blocks are marked, and errors are shown on the failing block |
 | **Error Log** | All runtime errors are logged in-page with a count indicator in the header bar |
 
 ---
@@ -100,14 +105,22 @@ The connection is polled every 5 seconds. If it drops, the server will attempt t
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/status` | Returns connection status and current IPs |
+| GET | `/status` | Connection status, current IPs, `reconnecting`/`attempts`/`lastError` while reconnecting, and whether the robot is `awake` |
 | GET | `/send?text=...&fontSize=...&color=...` | Display text on the tablet |
-| POST | `/connect` | Connect to a robot (`hostIp`, `pepperIp`) |
+| POST | `/connect` | Connect to a robot (`hostIp`, `pepperIp`; `reconnect: true` skips waking the robot) |
 | POST | `/disconnect` | Disconnect from the robot |
 | POST | `/speak` | Make Pepper say text (`text`) |
 | POST | `/send-image` | Display an image on the tablet (`imageData` as data URI) |
-| POST | `/motion` | Play a named animation (`motion`) |
+| GET | `/settings` | Current `volume`, `brightness` (0–100) and voice `pitch` |
+| POST | `/set-volume` / `/set-brightness` / `/set-pitch` | Set a value (`value`: 0–100, 0–100, 50–200) |
+| POST | `/clear-tablet` | Hide the webview, image and video on the tablet |
+| POST | `/list-motions` | Animations (`animations`) and app animations (`behaviors`) installed on the robot |
+| POST | `/motion` | Play a named animation or app animation (`motion`) |
 | POST | `/stop-motion` | Stop all animations |
+| POST | `/stop-speech` | Interrupt current speech |
+| POST | `/drive` | Drive the wheels (`x` forward, `y` left, `theta` turn left — each −1…1 — and `speed` 0.1…1). Must be re-sent at least every 0.6 s or the wheels stop |
+| POST | `/drive-stop` | Stop the wheels |
+| POST | `/set-obstacle-avoidance` | Turn obstacle avoidance on/off (`enabled`: true/false) |
 | POST | `/wake-up` | Wake up robot motors |
 | POST | `/emergency-stop` | Stop animations and put robot in rest position |
 | POST | `/list-behaviors` | List installed and running behaviours |
@@ -141,3 +154,10 @@ pepper_universal_interface/
 | Robot won't move | Click **Wake Up** to re-enable motor stiffness |
 | Animations don't play | Ensure the robot is awake (Wake Up) and no emergency stop is active |
 | `run.py` exits with "could not import 'qi'" | Your platform/Python combo has no prebuilt wheel — check the table in [Requirements](#requirements). On Windows or Intel Mac, run `bridge.py` from WSL2/Linux instead. On Apple Silicon, install Python 3.12, delete `.venv/`, and re-run `run.py` |
+
+### Pepper won't drive
+
+- **"Charging flap is open"** — close the charging flap at the back of Pepper's base. NAOqi locks the wheels while it is open.
+- **"Obstacle too close in that direction"** — Pepper's built-in collision protection refused the move; try another direction or clear the area.
+- **"Pepper is resting"** — press **Wake Up** first. If Pepper keeps going back to rest on its own, its self-diagnosis has found a hardware problem (check the robot log for "Robot health is bad").
+- Driving always stops when you release the keys, press Space, switch driving off, press Stop Motion / Emergency Stop, switch to another window, or if the browser stops sending commands for 0.6 s.
