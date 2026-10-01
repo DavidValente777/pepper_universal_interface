@@ -7,7 +7,7 @@ before(async () => {
   page = await openControllerPage();
 });
 after(async () => {
-  await page.close();
+  await page?.close();
 });
 
 test("the controller page loads without errors and has sequence.js", async () => {

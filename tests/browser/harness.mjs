@@ -7,7 +7,7 @@ import { readFile, mkdtemp, rm } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join, extname, normalize, sep } from "node:path";
+import { join, extname, normalize } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../..", import.meta.url));
@@ -97,25 +97,61 @@ async function launchChrome() {
   const dir = await mkdtemp(join(tmpdir(), "pepper-page-test-"));
   const proc = spawn(CHROME, ["--headless=new", "--remote-debugging-port=0", `--user-data-dir=${dir}`,
     "--no-first-run", "--no-default-browser-check", "--window-size=1400,1000", "about:blank"], { stdio: "ignore" });
-  proc.on("error", (error) => { throw new Error(`Could not start Chrome (${CHROME}): ${error.message}`); });
-  const portFile = join(dir, "DevToolsActivePort");
-  for (let i = 0; i < 100 && !existsSync(portFile); i++) await sleep(100);
-  if (!existsSync(portFile)) throw new Error("Chrome did not start (no DevToolsActivePort)");
-  const port = readFileSync(portFile, "utf8").split("\n")[0].trim();
-  let page;
-  for (let i = 0; i < 50 && !page; i++) {
-    const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
-    page = targets.find((t) => t.type === "page");
-    if (!page) await sleep(100);
+  const exited = new Promise((resolve) => proc.once("exit", resolve));
+  const failed = new Promise((_, reject) => {
+    proc.once("error", (error) => reject(new Error(`Could not start Chrome (${CHROME}): ${error.message}`)));
+    proc.once("exit", (code) => reject(new Error(`Chrome exited during startup (code ${code})`)));
+  });
+  let gone = false;
+  failed.catch(() => { gone = true; });
+  const chrome = {
+    proc,
+    dir,
+    async stop() {
+      if (proc.exitCode === null && proc.signalCode === null && proc.pid) {
+        proc.kill();
+        await exited;
+      }
+      await rm(dir, { recursive: true, force: true });
+    },
+  };
+  try {
+    const portFile = join(dir, "DevToolsActivePort");
+    const started = (async () => {
+      for (let i = 0; i < 100 && !gone && !existsSync(portFile); i++) await sleep(100);
+      if (gone) return;
+      if (!existsSync(portFile)) throw new Error("Chrome did not start (no DevToolsActivePort)");
+    })();
+    await Promise.race([started, failed]);
+    const port = readFileSync(portFile, "utf8").split("\n")[0].trim();
+    let page;
+    for (let i = 0; i < 50 && !page; i++) {
+      const targets = await (await fetch(`http://127.0.0.1:${port}/json`)).json();
+      page = targets.find((t) => t.type === "page");
+      if (!page) await sleep(100);
+    }
+    if (!page) throw new Error("Chrome has no page target");
+    chrome.wsUrl = page.webSocketDebuggerUrl;
+    return chrome;
+  } catch (error) {
+    await chrome.stop();
+    throw error;
   }
-  return { proc, dir, wsUrl: page.webSocketDebuggerUrl };
 }
 
 async function connectCdp(wsUrl) {
   const ws = new WebSocket(wsUrl);
-  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
+  await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = () => reject(new Error("Chrome DevTools connection failed")); });
   let nextId = 0;
+  let closed = false;
   const pending = new Map();
+  const onClosed = () => {
+    closed = true;
+    for (const { reject } of pending.values()) reject(new Error("Chrome DevTools connection closed"));
+    pending.clear();
+  };
+  ws.onclose = onClosed;
+  ws.onerror = onClosed;
   const listeners = new Map();
   ws.onmessage = (message) => {
     const data = JSON.parse(message.data);
@@ -129,9 +165,17 @@ async function connectCdp(wsUrl) {
   };
   return {
     send(method, params = {}) {
+      if (closed) return Promise.reject(new Error("Chrome DevTools connection closed"));
       const id = ++nextId;
-      ws.send(JSON.stringify({ id, method, params }));
-      return new Promise((resolve, reject) => pending.set(id, { resolve, reject }));
+      return new Promise((resolve, reject) => {
+        pending.set(id, { resolve, reject });
+        try {
+          ws.send(JSON.stringify({ id, method, params }));
+        } catch (error) {
+          pending.delete(id);
+          reject(error);
+        }
+      });
     },
     on(method, listener) {
       if (!listeners.has(method)) listeners.set(method, []);
@@ -147,20 +191,34 @@ async function connectCdp(wsUrl) {
 }
 
 export async function openControllerPage() {
-  const server = await startServer();
-  const chrome = await launchChrome();
-  const cdp = await connectCdp(chrome.wsUrl);
+  let server;
+  let chrome;
+  let cdp;
+  async function close() {
+    cdp?.close();
+    if (chrome) await chrome.stop();
+    if (server) await new Promise((resolve) => { server.close(resolve); server.closeAllConnections?.(); });
+  }
+
   const exceptions = [];
-  cdp.on("Runtime.exceptionThrown", (p) =>
-    exceptions.push(p.exceptionDetails.exception?.description || p.exceptionDetails.text));
-  await cdp.send("Runtime.enable");
-  await cdp.send("Page.enable");
-  await cdp.send("Network.enable");
-  await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
-  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: FAKE_BRIDGE + PAGE_HELPERS });
-  const loaded = cdp.once("Page.loadEventFired");
-  await cdp.send("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/controller.html` });
-  await loaded;
+  try {
+    server = await startServer();
+    chrome = await launchChrome();
+    cdp = await connectCdp(chrome.wsUrl);
+    cdp.on("Runtime.exceptionThrown", (p) =>
+      exceptions.push(p.exceptionDetails.exception?.description || p.exceptionDetails.text));
+    await cdp.send("Runtime.enable");
+    await cdp.send("Page.enable");
+    await cdp.send("Network.enable");
+    await cdp.send("Network.setCacheDisabled", { cacheDisabled: true });
+    await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: FAKE_BRIDGE + PAGE_HELPERS });
+    const loaded = cdp.once("Page.loadEventFired");
+    await cdp.send("Page.navigate", { url: `http://127.0.0.1:${server.address().port}/controller.html` });
+    await loaded;
+  } catch (error) {
+    await close().catch(() => {});
+    throw error;
+  }
 
   async function evaluate(source) {
     const { result, exceptionDetails } = await cdp.send("Runtime.evaluate", {
@@ -170,15 +228,6 @@ export async function openControllerPage() {
     });
     if (exceptionDetails) throw new Error(exceptionDetails.exception?.description || exceptionDetails.text);
     return result.value;
-  }
-
-  async function close() {
-    cdp.close();
-    const exited = new Promise((resolve) => chrome.proc.once("exit", resolve));
-    chrome.proc.kill();
-    await exited;
-    server.close();
-    await rm(chrome.dir, { recursive: true, force: true });
   }
 
   return { evaluate, exceptions, close };
