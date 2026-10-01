@@ -59,6 +59,53 @@ function moveBlockToGap(steps, id, gapIndex) {
   return next.filter((step) => step.length > 0);
 }
 
+function isValidBlock(block) {
+  return !!block && typeof block === "object" && VALID_BLOCK_TYPES.includes(block.type);
+}
+
+// Keeps the first block of each channel; every other block gets its own step
+// right after, so a hand-edited file can never play two motions at once
+function splitConflicts(step) {
+  const kept = [];
+  const moved = [];
+  step.forEach((block) => (canJoinStep(kept, block) ? kept : moved).push(block));
+  return [kept, ...moved.map((block) => [block])];
+}
+
+function serializeTimeline(name, steps, now) {
+  return {
+    name,
+    version: 2,
+    exportedAt: now.toISOString(),
+    steps: steps.map((step) => step.map(({ id, ...block }) => block)),
+  };
+}
+
+// Version 2 files have "steps"; older files have a flat "blocks" list, which
+// becomes one block per step so it plays exactly as before
+function parseTimelineFile(data, makeId) {
+  let rawSteps;
+  if (data && Array.isArray(data.steps)) {
+    rawSteps = data.steps.map((step) => (Array.isArray(step) ? step : []));
+  } else if (data && Array.isArray(data.blocks)) {
+    rawSteps = data.blocks.map((block) => [block]);
+  } else {
+    throw new Error("Invalid file — no steps or blocks found.");
+  }
+  const steps = [];
+  let movedCount = 0;
+  rawSteps.forEach((rawStep) => {
+    const blocks = rawStep.filter(isValidBlock).map((block) => ({ ...block, id: makeId() }));
+    if (blocks.length === 0) return;
+    const parts = splitConflicts(blocks);
+    movedCount += parts.length - 1;
+    steps.push(...parts);
+  });
+  if (steps.length === 0) throw new Error("No valid blocks found in this file.");
+  const blockCount = steps.reduce((count, step) => count + step.length, 0);
+  return { name: data.name || "Untitled", steps, blockCount, movedCount };
+}
+
 if (typeof module !== "undefined") {
   module.exports = {
     VALID_BLOCK_TYPES,
@@ -69,5 +116,7 @@ if (typeof module !== "undefined") {
     withoutBlock,
     moveBlockToStep,
     moveBlockToGap,
+    serializeTimeline,
+    parseTimelineFile,
   };
 }

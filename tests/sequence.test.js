@@ -89,3 +89,52 @@ test("moveBlockToGap removes the source step when it empties", () => {
   const steps = [[speech(1)], [motion(2)]];
   assert.deepEqual(ids(seq.moveBlockToGap(steps, 1, 2)), [[2], [1]]);
 });
+
+let nextId = 0;
+const makeId = () => ++nextId;
+const types = (steps) => steps.map((step) => step.map((b) => b.type));
+
+test("serializeTimeline writes version 2 steps without ids", () => {
+  const data = seq.serializeTimeline("demo", [[speech(1)], [motion(2), speech(3)]], new Date("2026-10-01T12:00:00Z"));
+  assert.equal(data.name, "demo");
+  assert.equal(data.version, 2);
+  assert.equal(data.exportedAt, "2026-10-01T12:00:00.000Z");
+  assert.deepEqual(types(data.steps), [["speech"], ["motion", "speech"]]);
+  assert.ok(data.steps.flat().every((b) => !("id" in b)));
+});
+
+test("parseTimelineFile reads version 2 files and issues fresh ids", () => {
+  const file = seq.serializeTimeline("demo", [[speech(1)], [motion(2), speech(3)]], new Date());
+  const parsed = seq.parseTimelineFile(JSON.parse(JSON.stringify(file)), makeId);
+  assert.equal(parsed.name, "demo");
+  assert.deepEqual(types(parsed.steps), [["speech"], ["motion", "speech"]]);
+  assert.equal(parsed.blockCount, 3);
+  assert.equal(parsed.movedCount, 0);
+  const allIds = parsed.steps.flat().map((b) => b.id);
+  assert.equal(new Set(allIds).size, 3);
+});
+
+test("parseTimelineFile turns an old flat file into one block per step", () => {
+  const parsed = seq.parseTimelineFile({ name: "old", blocks: [speech(7), motion(8), delay(9)] }, makeId);
+  assert.deepEqual(types(parsed.steps), [["speech"], ["motion"], ["delay"]]);
+  assert.equal(parsed.blockCount, 3);
+});
+
+test("parseTimelineFile splits conflicting blocks into their own steps", () => {
+  const parsed = seq.parseTimelineFile({ steps: [[motion(1), motion(2), speech(3)], [text(4), image(5)]] }, makeId);
+  assert.deepEqual(types(parsed.steps), [["motion", "speech"], ["motion"], ["text"], ["image"]]);
+  assert.equal(parsed.movedCount, 2);
+  assert.equal(parsed.name, "Untitled");
+});
+
+test("parseTimelineFile drops invalid blocks and empty steps", () => {
+  const parsed = seq.parseTimelineFile({ steps: [[{ type: "laser" }, speech(1)], [], [null, 42]] }, makeId);
+  assert.deepEqual(types(parsed.steps), [["speech"]]);
+});
+
+test("parseTimelineFile rejects malformed files with a clear message", () => {
+  assert.throws(() => seq.parseTimelineFile({ steps: [null, "x", []] }, makeId), { message: "No valid blocks found in this file." });
+  assert.throws(() => seq.parseTimelineFile({ hello: 1 }, makeId), { message: "Invalid file — no steps or blocks found." });
+  assert.throws(() => seq.parseTimelineFile(null, makeId), { message: "Invalid file — no steps or blocks found." });
+  assert.throws(() => seq.parseTimelineFile({ steps: [] }, makeId), { message: "No valid blocks found in this file." });
+});
