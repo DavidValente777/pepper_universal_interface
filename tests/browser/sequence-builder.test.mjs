@@ -252,3 +252,56 @@ test("Stop ends a step with a long wait and speech promptly", async () => {
   assert.deepEqual(result.states, ["stopped", "stopped", null]);
   assert.equal(result.status, "Stopped after 0 of 2 steps");
 });
+
+// Exports the current timeline and returns the parsed file
+const EXPORT = `
+  let blob;
+  const original = URL.createObjectURL;
+  URL.createObjectURL = (b) => { blob = b; return "blob:test"; };
+  try { exportTimeline(); } finally { URL.createObjectURL = original; }
+  const exported = JSON.parse(await blob.text());`;
+// Imports `file` (a JS object) and waits for the import message
+const IMPORT = (file) => `
+  __bridge.dialogs = [];
+  importTimeline(new File([JSON.stringify(${file})], "t.json", { type: "application/json" }));
+  for (let i = 0; i < 50 && __bridge.dialogs.length === 0; i++) await new Promise((r) => setTimeout(r, 20));
+  const message = __bridge.dialogs[0];`;
+
+test("export writes version 2 steps and import restores them", async () => {
+  const result = await page.evaluate(`
+    __t.load(${JSON.stringify([[SPEECH], [MOTION, SPEECH_2], [DELAY]])});
+    ${EXPORT}
+    __t.load([[${JSON.stringify(TEXT)}]]);
+    ${IMPORT("exported")}
+    return { version: exported.version, ids: exported.steps.flat().some((b) => "id" in b),
+      shape: __t.shape(), message };`);
+  assert.equal(result.version, 2);
+  assert.equal(result.ids, false);
+  assert.deepEqual(result.shape, [["speech"], ["motion", "speech"], ["delay"]]);
+  assert.equal(result.message, 'Imported "my_timeline" — 3 steps, 4 blocks');
+});
+
+test("an old flat file imports as one block per step", async () => {
+  const result = await page.evaluate(`
+    ${IMPORT(JSON.stringify({ name: "old", blocks: [SPEECH, MOTION] }))}
+    return { shape: __t.shape(), message };`);
+  assert.deepEqual(result.shape, [["speech"], ["motion"]]);
+  assert.equal(result.message, 'Imported "old" — 2 steps, 2 blocks');
+});
+
+test("conflicting blocks in a file are split into their own steps", async () => {
+  const result = await page.evaluate(`
+    ${IMPORT(JSON.stringify({ name: "clash", version: 2, steps: [[MOTION, MOTION, SPEECH]] }))}
+    return { shape: __t.shape(), message };`);
+  assert.deepEqual(result.shape, [["motion", "speech"], ["motion"]]);
+  assert.equal(result.message, 'Imported "clash" — 2 steps, 3 blocks (1 conflicting block moved to its own step)');
+});
+
+test("a malformed file is rejected and the timeline is left alone", async () => {
+  const result = await page.evaluate(`
+    __t.load(${JSON.stringify([[SPEECH]])});
+    ${IMPORT(JSON.stringify({ name: "bad", steps: [null, "x", []] }))}
+    return { shape: __t.shape(), message };`);
+  assert.deepEqual(result.shape, [["speech"]]);
+  assert.equal(result.message, "No valid blocks found in this file.");
+});

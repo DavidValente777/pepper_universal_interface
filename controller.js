@@ -1646,13 +1646,7 @@ function exportTimeline() {
   if (!name) return;
 
   const sanitizedName = name.replace(/[^a-zA-Z0-9_-]/g, "_");
-  const exportData = {
-    name: name,
-    exportedAt: new Date().toISOString(),
-    blocks: timelineSteps.flat(),
-  };
-
-  const jsonString = JSON.stringify(exportData, null, 2);
+  const jsonString = JSON.stringify(serializeTimeline(name, timelineSteps, new Date()), null, 2);
   const blob = new Blob([jsonString], { type: "application/json" });
   const url = URL.createObjectURL(blob);
 
@@ -1665,47 +1659,37 @@ function exportTimeline() {
   URL.revokeObjectURL(url);
 }
 
+function importSummary({ name, steps, blockCount, movedCount }) {
+  const count = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`;
+  let text = `Imported "${name}" — ${count(steps.length, "step")}, ${count(blockCount, "block")}`;
+  if (movedCount === 1) text += " (1 conflicting block moved to its own step)";
+  else if (movedCount > 1) text += ` (${movedCount} conflicting blocks moved to their own steps)`;
+  return text;
+}
+
 function importTimeline(file) {
   if (!file) return;
 
   const reader = new FileReader();
   reader.onload = (e) => {
+    let parsed;
     try {
-      const importData = JSON.parse(e.target.result);
-
-      if (!importData.blocks || !Array.isArray(importData.blocks)) {
-        alert("Invalid file — no blocks found.");
-        return;
-      }
-
-      const validTypes = ["speech", "text", "image", "delay", "motion"];
-      const validBlocks = importData.blocks.filter((block) => {
-        return block && block.type && validTypes.includes(block.type);
-      });
-
-      if (validBlocks.length === 0) {
-        alert("No valid blocks found in this file.");
-        return;
-      }
-
-      if (timelineSteps.length > 0) {
-        if (!confirm(`Replace the current timeline (${timelineSteps.length} steps)?`)) {
-          return;
-        }
-      }
-
-      if (isPlaying) {
-        alert("Stop the timeline before importing.");
-        return;
-      }
-      // Re-issue ids so blocks from different files never collide
-      timelineSteps = validBlocks.map((block) => [{ ...block, id: nextBlockId() }]);
-      resetBlockStates();
-      renderTimeline();
-      alert(`Imported "${importData.name || "Untitled"}" — ${validBlocks.length} blocks loaded.`);
+      parsed = parseTimelineFile(JSON.parse(e.target.result), nextBlockId);
     } catch (error) {
-      alert("Could not read the file: " + error.message);
+      alert(error instanceof SyntaxError ? "Could not read the file: " + error.message : error.message);
+      return;
     }
+    if (timelineSteps.length > 0 && !confirm(`Replace the current timeline (${timelineSteps.length} steps)?`)) {
+      return;
+    }
+    if (isPlaying) {
+      alert("Stop the timeline before importing.");
+      return;
+    }
+    timelineSteps = parsed.steps;
+    resetBlockStates();
+    renderTimeline();
+    alert(importSummary(parsed));
   };
   reader.readAsText(file);
 }
