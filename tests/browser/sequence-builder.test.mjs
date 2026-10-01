@@ -71,3 +71,83 @@ test("an empty timeline shows the placeholder", async () => {
     return { empty: t.classList.contains("empty"), children: t.children.length };`);
   assert.deepEqual(empty, { empty: true, children: 0 });
 });
+
+test("dropping onto a step joins it and removes the emptied step", async () => {
+  const result = await page.evaluate(`
+    const [[speech], [motion]] = __t.load(${JSON.stringify([[SPEECH], [MOTION]])});
+    const classes = __t.drag(speech, document.querySelector('.timeline-step[data-step="1"]'));
+    return { classes, shape: __t.shape() };`);
+  assert.match(result.classes, /drop-ok/);
+  assert.deepEqual(result.shape, [["motion", "speech"]]);
+});
+
+test("dropping onto a block card inside a step joins that step", async () => {
+  const shape = await page.evaluate(`
+    const [[speech], [motion]] = __t.load(${JSON.stringify([[SPEECH], [MOTION]])});
+    __t.drag(speech, document.querySelector('.timeline-block[data-id="' + motion + '"] .block-content'));
+    return __t.shape();`);
+  assert.deepEqual(shape, [["motion", "speech"]]);
+});
+
+test("a conflicting drop is refused with a status message", async () => {
+  const result = await page.evaluate(`
+    __bridge.dialogs = [];
+    const [[first]] = __t.load(${JSON.stringify([[MOTION], [MOTION]])});
+    const classes = __t.drag(first, document.querySelector('.timeline-step[data-step="1"]'));
+    return { classes, shape: __t.shape(),
+      status: document.getElementById("timelineStatusText").textContent,
+      dialogs: __bridge.dialogs.length };`);
+  assert.match(result.classes, /drop-refused/);
+  assert.deepEqual(result.shape, [["motion"], ["motion"]]);
+  assert.equal(result.status, "Step 2 already has a motion");
+  assert.equal(result.dialogs, 0);
+});
+
+test("dropping into a gap makes a new step there", async () => {
+  const result = await page.evaluate(`
+    const steps = ${JSON.stringify([[SPEECH, MOTION], [DELAY]])};
+    let [[, motion]] = __t.load(steps);
+    const classes = __t.drag(motion, document.querySelector('.timeline-gap[data-gap="2"]'));
+    const toEnd = __t.shape();
+    [[, motion]] = __t.load(steps);
+    __t.drag(motion, document.querySelector('.timeline-gap[data-gap="0"]'));
+    const toStart = __t.shape();
+    return { classes, toEnd, toStart };`);
+  assert.match(result.classes, /drop-target/);
+  assert.deepEqual(result.toEnd, [["speech"], ["delay"], ["motion"]]);
+  assert.deepEqual(result.toStart, [["motion"], ["speech"], ["delay"]]);
+});
+
+test("moving a step's only block away renumbers the steps", async () => {
+  const result = await page.evaluate(`
+    const [[speech]] = __t.load(${JSON.stringify([[SPEECH], [MOTION]])});
+    __t.drag(speech, document.querySelector('.timeline-gap[data-gap="2"]'));
+    return { shape: __t.shape(),
+      headers: [...document.querySelectorAll(".step-header")].map((h) => h.textContent) };`);
+  assert.deepEqual(result.shape, [["motion"], ["speech"]]);
+  assert.deepEqual(result.headers, ["Step 1", "Step 2"]);
+});
+
+test("a drag that did not start on a block is ignored", async () => {
+  const shape = await page.evaluate(`
+    __t.load(${JSON.stringify([[SPEECH], [MOTION]])});
+    __t.dragForeign(document.querySelector('.timeline-step[data-step="0"]'));
+    __t.dragForeign(document.querySelector('.timeline-gap[data-gap="1"]'));
+    return __t.shape();`);
+  assert.deepEqual(shape, [["speech"], ["motion"]]);
+  assert.deepEqual(page.exceptions, []);
+});
+
+test("blocks cannot be dragged while the timeline plays", async () => {
+  const shape = await page.evaluate(`
+    __bridge.delays["/speak"] = 400;
+    const [[speech]] = __t.load(${JSON.stringify([[SPEECH], [MOTION]])});
+    const playing = playTimeline();
+    await new Promise((r) => setTimeout(r, 50));
+    __t.drag(speech, document.querySelector('.timeline-gap[data-gap="2"]'));
+    const during = __t.shape();
+    await playing;
+    __bridge.delays = {};
+    return during;`);
+  assert.deepEqual(shape, [["speech"], ["motion"]]);
+});

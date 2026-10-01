@@ -40,6 +40,7 @@ let currentColor = "#000000";
 let currentImageData = null;
 let timelineSteps = []; // [[block, ...], ...]: the blocks of a step start together
 let playingStepIndex = -1; // step being played, -1 when idle
+let draggedBlockId = null; // block being dragged in the timeline; null for any other drag (e.g. a file)
 let isPlaying = false;
 let playbackAborted = false;
 let blockStates = {}; // block id -> { state: "playing"|"done"|"error"|"stopped", error }
@@ -1288,6 +1289,83 @@ function blockContentHtml(block) {
   return "";
 }
 
+function clearDropHighlights() {
+  document
+    .querySelectorAll("#timeline .drop-ok, #timeline .drop-refused, #timeline .drop-target")
+    .forEach((el) => el.classList.remove("drop-ok", "drop-refused", "drop-target"));
+}
+
+function updateSteps(steps) {
+  if (steps !== timelineSteps) {
+    timelineSteps = steps;
+    resetBlockStates();
+  }
+  renderTimeline();
+}
+
+function attachBlockDrag(blockEl, block) {
+  blockEl.addEventListener("dragstart", (e) => {
+    if (isPlaying) {
+      e.preventDefault();
+      return;
+    }
+    draggedBlockId = block.id;
+    e.dataTransfer.effectAllowed = "move";
+    e.dataTransfer.setData("text/plain", String(block.id)); // Firefox only starts a drag that carries data
+    blockEl.classList.add("dragging");
+  });
+  blockEl.addEventListener("dragend", () => {
+    draggedBlockId = null;
+    blockEl.classList.remove("dragging");
+    clearDropHighlights();
+  });
+}
+
+// Dropping onto a step (or any block in it) joins that step, unless the step
+// already has a block on the same channel
+function attachStepDrop(stepEl, index) {
+  stepEl.addEventListener("dragover", (e) => {
+    if (draggedBlockId === null || isPlaying) return;
+    e.preventDefault(); // accept the drop even when refused, so the drop can say why
+    const { error } = moveBlockToStep(timelineSteps, draggedBlockId, index);
+    clearDropHighlights();
+    stepEl.classList.add(error ? "drop-refused" : "drop-ok");
+    e.dataTransfer.dropEffect = "move";
+  });
+  stepEl.addEventListener("dragleave", (e) => {
+    if (!stepEl.contains(e.relatedTarget)) stepEl.classList.remove("drop-ok", "drop-refused");
+  });
+  stepEl.addEventListener("drop", (e) => {
+    if (draggedBlockId === null || isPlaying) return;
+    e.preventDefault();
+    const { steps, error } = moveBlockToStep(timelineSteps, draggedBlockId, index);
+    clearDropHighlights();
+    if (error) {
+      setTimelineStatus("error", error, 0);
+      return;
+    }
+    updateSteps(steps);
+  });
+}
+
+// Dropping into a gap makes the block a new step at that position
+function attachGapDrop(gapEl, index) {
+  gapEl.addEventListener("dragover", (e) => {
+    if (draggedBlockId === null || isPlaying) return;
+    e.preventDefault();
+    clearDropHighlights();
+    gapEl.classList.add("drop-target");
+    e.dataTransfer.dropEffect = "move";
+  });
+  gapEl.addEventListener("dragleave", () => gapEl.classList.remove("drop-target"));
+  gapEl.addEventListener("drop", (e) => {
+    if (draggedBlockId === null || isPlaying) return;
+    e.preventDefault();
+    clearDropHighlights();
+    updateSteps(moveBlockToGap(timelineSteps, draggedBlockId, index));
+  });
+}
+
 function createBlockElement(block) {
   const blockEl = document.createElement("div");
   blockEl.className = `timeline-block ${block.type}`;
@@ -1300,6 +1378,7 @@ function createBlockElement(block) {
     </div>`;
   blockEl.querySelector(".delete-btn").addEventListener("click", () => deleteBlock(block.id));
   applyBlockState(blockEl, blockStates[block.id]);
+  attachBlockDrag(blockEl, block);
   return blockEl;
 }
 
@@ -1311,6 +1390,7 @@ function createStepElement(step, index) {
   stepEl.innerHTML = `<div class="step-header">Step ${index + 1}${together}</div><div class="step-blocks"></div>`;
   const blocksEl = stepEl.querySelector(".step-blocks");
   step.forEach((block) => blocksEl.appendChild(createBlockElement(block)));
+  attachStepDrop(stepEl, index);
   return stepEl;
 }
 
@@ -1321,6 +1401,7 @@ function createGapElement(index) {
   gapEl.className = "timeline-gap" + (between ? "" : " edge") + (between && index === playingStepIndex ? " active" : "");
   gapEl.dataset.gap = index;
   if (between) gapEl.innerHTML = ARROW_SVG;
+  attachGapDrop(gapEl, index);
   return gapEl;
 }
 
