@@ -9,6 +9,7 @@
   <body>
     <header class="app-bar">
       Pepper Controller
+      <span id="batteryIndicator" class="battery-indicator unknown" title="Pepper's battery">🔋 –</span>
       <button id="errorIndicator" class="error-indicator" style="display: none">
         <span id="errorCount">0</span> error<span id="errorPlural">s</span>
       </button>
@@ -62,15 +63,15 @@
           <button id="emergencyStopBtn" class="emergency-stop-btn" title="Emergency stop - puts robot in safe rest position">
             Emergency Stop
           </button>
+          <button id="clearTabletBtn" class="clear-tablet-btn" title="Remove any text, image, video or webpage from Pepper's tablet">
+            Clear Tablet
+          </button>
         </div>
         <div class="robot-status">
           <span class="status-indicator" id="robotStatusIndicator"></span>
           <span id="robotStatusText">Unknown</span>
         </div>
 
-        <button id="clearTabletBtn" class="clear-tablet-btn" title="Remove any text, image, video or webpage from Pepper's tablet">
-          Clear Tablet
-        </button>
 
         <div class="robot-sliders">
           <div class="slider-group">
@@ -90,6 +91,7 @@
 
       <!-- Drive -->
       <p class="section-label">Drive</p>
+      <div class="drive-row">
       <div class="drive-panel" id="drivePanel">
         <div class="drive-main">
           <div class="drive-settings">
@@ -106,20 +108,41 @@
               <input type="range" id="driveSpeedSlider" min="10" max="100" step="5" value="40" />
             </div>
             <p class="drive-hint">
-              Hold <kbd>↑</kbd> <kbd>↓</kbd> to drive, <kbd>←</kbd> <kbd>→</kbd> to turn,
+              Hold <kbd>↑</kbd> <kbd>↓</kbd> to drive, <kbd>←</kbd> <kbd>→</kbd> or <kbd>Q</kbd> <kbd>E</kbd> to turn on the spot,
               <kbd>Shift</kbd>+<kbd>←</kbd> <kbd>→</kbd> to slide sideways.
               Release to stop, <kbd>Space</kbd> stops immediately.
             </p>
             <div id="driveStatus" class="drive-status">Off</div>
           </div>
           <div class="drive-pad" aria-label="Drive controls">
+            <button class="drive-key" data-key="RotateLeft" title="Turn left on the spot (← or Q)" style="grid-area: rotl">↺</button>
             <button class="drive-key" data-key="ArrowUp" title="Forward (↑)" style="grid-area: up">▲</button>
-            <button class="drive-key" data-key="ArrowLeft" title="Turn left (←)" style="grid-area: left">◀</button>
+            <button class="drive-key" data-key="RotateRight" title="Turn right on the spot (→ or E)" style="grid-area: rotr">↻</button>
+            <button class="drive-key" data-key="SlideLeft" title="Slide left (Shift+←)" style="grid-area: left">◀</button>
             <button class="drive-key drive-key-stop" data-key="stop" title="Stop (Space)" style="grid-area: stop">■</button>
-            <button class="drive-key" data-key="ArrowRight" title="Turn right (→)" style="grid-area: right">▶</button>
+            <button class="drive-key" data-key="SlideRight" title="Slide right (Shift+→)" style="grid-area: right">▶</button>
             <button class="drive-key" data-key="ArrowDown" title="Backward (↓)" style="grid-area: down">▼</button>
           </div>
         </div>
+      </div>
+
+      <div class="camera-panel" id="cameraPanel">
+        <div class="camera-header">
+          <button id="cameraToggleBtn" class="camera-toggle" aria-pressed="false">Camera: OFF</button>
+          <select id="cameraSelect" title="Which camera to show">
+            <option value="0">Head (forehead)</option>
+            <option value="1">Mouth (looks down)</option>
+            <option value="2">Eyes – infrared</option>
+            <option value="3">Eyes – depth</option>
+            <option value="4">Eyes – infrared + distance colour</option>
+          </select>
+        </div>
+        <div class="camera-view">
+          <img id="cameraImg" alt="Pepper camera feed" hidden />
+          <p id="cameraPlaceholder" class="camera-placeholder">Camera off</p>
+        </div>
+        <div id="cameraStatus" class="camera-status"></div>
+      </div>
       </div>
 
       <!-- Instant Send -->
@@ -177,37 +200,9 @@
         <!-- Motions Card -->
         <div class="instant-card motion-card">
           <h2><span class="icon">Motions</span></h2>
-          <label for="motionSelect">Choose a motion:</label>
+          <label>Choose a motion:</label>
           <div class="motion-select-wrapper">
-            <select id="motionSelect">
-              <option value="">-- Select motion --</option>
-              <optgroup label="Dances">
-                <option value="animations/Stand/Gestures/Hey_1">Hey</option>
-                <option value="animations/Stand/Gestures/BowShort_1">Bow</option>
-                <option value="animations/Stand/Gestures/Enthusiastic_4">Enthusiastic</option>
-                <option value="animations/Stand/Gestures/Excited_1">Excited</option>
-                <option value="animations/Stand/Waiting/WakeUp_1">Wake Up</option>
-              </optgroup>
-              <optgroup label="Gestures">
-                <option value="animations/Stand/Gestures/Yes_1">Yes (nod)</option>
-                <option value="animations/Stand/Gestures/No_1">No (shake)</option>
-                <option value="animations/Stand/Gestures/Think_1">Think</option>
-                <option value="animations/Stand/Gestures/Explain_1">Explain</option>
-                <option value="animations/Stand/Gestures/ShowSky_1">Show Sky</option>
-              </optgroup>
-              <optgroup label="Emotions">
-                <option value="animations/Stand/Emotions/Positive/Happy_4">Happy</option>
-                <option value="animations/Stand/Emotions/Positive/Laugh_1">Laugh</option>
-                <option value="animations/Stand/Emotions/Negative/Sad_1">Sad</option>
-                <option value="animations/Stand/Emotions/Negative/Surprise_1">Surprise</option>
-                <option value="animations/Stand/Emotions/Neutral/AskForAttention_1">Ask for attention</option>
-              </optgroup>
-              <optgroup label="Reactions">
-                <option value="animations/Stand/Reactions/ShakeBody_1">Shake body</option>
-                <option value="animations/Stand/Reactions/SeeSomething_1">See something</option>
-                <option value="animations/Stand/Reactions/TouchHead_1">Touch head</option>
-              </optgroup>
-            </select>
+            <div class="motion-picker" id="motionSelect"></div>
           </div>
           <div class="motion-list-status">
             <span id="motionListStatus">Built-in list (18 motions)</span>
@@ -259,35 +254,7 @@
           <div class="add-block-card motion">
             <h3>Motion</h3>
             <div class="motion-select-wrapper">
-              <select id="timelineMotionSelect">
-                <option value="">-- Select motion --</option>
-                <optgroup label="Dances">
-                  <option value="animations/Stand/Gestures/Hey_1">Hey</option>
-                  <option value="animations/Stand/Gestures/BowShort_1">Bow</option>
-                  <option value="animations/Stand/Gestures/Enthusiastic_4">Enthusiastic</option>
-                  <option value="animations/Stand/Gestures/Excited_1">Excited</option>
-                  <option value="animations/Stand/Waiting/WakeUp_1">Wake Up</option>
-                </optgroup>
-                <optgroup label="Gestures">
-                  <option value="animations/Stand/Gestures/Yes_1">Yes (nod)</option>
-                  <option value="animations/Stand/Gestures/No_1">No (shake)</option>
-                  <option value="animations/Stand/Gestures/Think_1">Think</option>
-                  <option value="animations/Stand/Gestures/Explain_1">Explain</option>
-                  <option value="animations/Stand/Gestures/ShowSky_1">Show Sky</option>
-                </optgroup>
-                <optgroup label="Emotions">
-                  <option value="animations/Stand/Emotions/Positive/Happy_4">Happy</option>
-                  <option value="animations/Stand/Emotions/Positive/Laugh_1">Laugh</option>
-                  <option value="animations/Stand/Emotions/Negative/Sad_1">Sad</option>
-                  <option value="animations/Stand/Emotions/Negative/Surprise_1">Surprise</option>
-                  <option value="animations/Stand/Emotions/Neutral/AskForAttention_1">Ask for attention</option>
-                </optgroup>
-                <optgroup label="Reactions">
-                  <option value="animations/Stand/Reactions/ShakeBody_1">Shake body</option>
-                  <option value="animations/Stand/Reactions/SeeSomething_1">See something</option>
-                  <option value="animations/Stand/Reactions/TouchHead_1">Touch head</option>
-                </optgroup>
-              </select>
+              <div class="motion-picker" id="timelineMotionSelect"></div>
             </div>
             <button id="addMotionBlock">Add to Timeline</button>
           </div>

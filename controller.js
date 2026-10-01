@@ -231,7 +231,18 @@ function loadConnection() {
   }
 }
 
+// Battery in the top bar: green above 50%, amber 20-50%, red below 20%
+function updateBattery(level, charging) {
+  const el = document.getElementById("batteryIndicator");
+  if (!el) return; // a cached older controller.html has no indicator
+  const known = typeof level === "number";
+  el.textContent = known ? `🔋 ${level}%${charging ? " ⚡" : ""}` : "🔋 –";
+  el.className = "battery-indicator " + (!known ? "unknown" : level > 50 ? "good" : level >= 20 ? "medium" : "low");
+  el.title = known ? `Pepper's battery: ${level}%${charging ? ", charging" : ""}` : "Pepper's battery (not connected)";
+}
+
 function markDisconnected() {
+  updateBattery(null);
   if (!isConnected) return;
   isConnected = false;
   setSlidersEnabled(false);
@@ -295,6 +306,7 @@ async function checkConnectionStatus() {
 
   if (data.connected) {
     if (typeof data.awake === "boolean") updateRobotStatus(data.awake ? "awake" : "resting");
+    updateBattery(data.battery, data.charging);
     const recovered = bridgeReconnecting || !isConnected;
     bridgeReconnecting = false;
     document.getElementById("hostIp").value = data.hostIp || "";
@@ -530,8 +542,7 @@ function removeImage() {
 }
 
 async function playMotion() {
-  const select = document.getElementById("motionSelect");
-  const motionValue = select.value;
+  const motionValue = motionPicker.value;
 
   if (!motionValue) {
     alert("Please select a motion first.");
@@ -574,16 +585,18 @@ let driveQueued = false;
 let driveLastError = "";
 let obstacleAvoidance = true;
 
+// Q/E turn on the spot like ← → (without Shift); the on-screen pad has its
+// own buttons for turning and sliding
+const ROTATE_KEYS = { q: "RotateLeft", e: "RotateRight" };
+
 function driveCommand() {
-  const up = driveHeld.has("ArrowUp") ? 1 : 0;
-  const down = driveHeld.has("ArrowDown") ? 1 : 0;
-  const left = driveHeld.has("ArrowLeft") ? 1 : 0;
-  const right = driveHeld.has("ArrowRight") ? 1 : 0;
-  const side = left - right;
+  const held = (key) => (driveHeld.has(key) ? 1 : 0);
+  const clampUnit = (v) => Math.max(-1, Math.min(1, v));
+  const arrowSide = held("ArrowLeft") - held("ArrowRight");
   return {
-    x: up - down,
-    y: driveShift ? side : 0,
-    theta: driveShift ? 0 : side,
+    x: held("ArrowUp") - held("ArrowDown"),
+    y: clampUnit((driveShift ? arrowSide : 0) + held("SlideLeft") - held("SlideRight")),
+    theta: clampUnit((driveShift ? 0 : arrowSide) + held("RotateLeft") - held("RotateRight")),
   };
 }
 
@@ -620,7 +633,7 @@ function updateDriveUi() {
   } else if (isMoving(cmd)) {
     setDriveStatus("moving", "Driving: " + describeDrive(cmd));
   } else {
-    setDriveStatus("ready", "Ready — hold an arrow key");
+    setDriveStatus("ready", "Ready — hold an arrow key or a pad button");
   }
 }
 
@@ -730,8 +743,14 @@ function onDriveKeyDown(e) {
     driveStop();
     return;
   }
+  const plainKey = !e.ctrlKey && !e.metaKey && !e.altKey; // leave browser shortcuts alone
+  const rotateKey = plainKey && ROTATE_KEYS[e.key.toLowerCase()];
   if (e.key === "Shift") {
     driveShift = true;
+  } else if (rotateKey) {
+    e.preventDefault();
+    if (driveHeld.has(rotateKey)) return; // key auto-repeat
+    driveHeld.add(rotateKey);
   } else if (DRIVE_KEYS.includes(e.key)) {
     e.preventDefault(); // no page scrolling / slider changes while driving
     driveShift = e.shiftKey;
@@ -746,8 +765,12 @@ function onDriveKeyDown(e) {
 
 function onDriveKeyUp(e) {
   if (!driveEnabled) return;
+  const rotateKey = ROTATE_KEYS[e.key.toLowerCase()];
   if (e.key === "Shift") {
     driveShift = false;
+  } else if (rotateKey) {
+    e.preventDefault();
+    if (!driveHeld.delete(rotateKey)) return;
   } else if (DRIVE_KEYS.includes(e.key)) {
     e.preventDefault();
     if (!driveHeld.delete(e.key)) return;
@@ -769,6 +792,100 @@ setInterval(() => {
   if (driveEnabled && isMoving(driveCommand())) sendDrive();
 }, DRIVE_HEARTBEAT_MS);
 
+// ─── Camera feed ─────────────────────────────────────────────────────────────
+
+// Frames are fetched one after another (never more than one in flight), so
+// the frame rate adapts to the network and the robot's encoding speed
+const CAMERA_RETRY_MS = 1000;
+let cameraOn = false;
+let cameraRun = 0; // bumps on every start/stop so an old loop ends itself
+let cameraObjectUrl = null;
+
+function setCameraStatus(text, isError) {
+  const el = document.getElementById("cameraStatus");
+  el.textContent = text;
+  el.classList.toggle("error", !!isError);
+}
+
+function showCameraFrame(blob) {
+  const img = document.getElementById("cameraImg");
+  if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
+  cameraObjectUrl = URL.createObjectURL(blob);
+  img.src = cameraObjectUrl;
+  img.hidden = false;
+  document.getElementById("cameraPlaceholder").hidden = true;
+}
+
+function clearCameraFrame(text) {
+  const img = document.getElementById("cameraImg");
+  img.hidden = true;
+  img.removeAttribute("src");
+  if (cameraObjectUrl) URL.revokeObjectURL(cameraObjectUrl);
+  cameraObjectUrl = null;
+  const placeholder = document.getElementById("cameraPlaceholder");
+  placeholder.textContent = text;
+  placeholder.hidden = false;
+}
+
+async function cameraLoop(run) {
+  let frames = 0;
+  let since = performance.now();
+  let lastError = "";
+  while (cameraOn && run === cameraRun) {
+    if (!isConnected) {
+      setCameraStatus("Waiting for connection…");
+      await new Promise((r) => setTimeout(r, CAMERA_RETRY_MS));
+      continue;
+    }
+    const cam = document.getElementById("cameraSelect").value;
+    try {
+      const r = await fetch(`/camera?cam=${cam}&t=${Date.now()}`);
+      if (!r.ok) {
+        let message = `HTTP ${r.status}`;
+        try {
+          message = (await r.json()).error || message;
+        } catch (e) {}
+        throw new Error(message);
+      }
+      const blob = await r.blob();
+      if (!cameraOn || run !== cameraRun) break;
+      showCameraFrame(blob);
+      lastError = "";
+      frames += 1;
+      const elapsed = performance.now() - since;
+      if (elapsed >= 1000) {
+        setCameraStatus(`${(frames / (elapsed / 1000)).toFixed(1)} fps`);
+        frames = 0;
+        since = performance.now();
+      }
+    } catch (error) {
+      if (error.message !== lastError) logError("Camera", error.message);
+      lastError = error.message;
+      setCameraStatus(error.message, true);
+      await new Promise((r) => setTimeout(r, CAMERA_RETRY_MS));
+    }
+  }
+}
+
+function setCameraEnabled(enabled) {
+  cameraOn = enabled;
+  cameraRun += 1;
+  const btn = document.getElementById("cameraToggleBtn");
+  btn.textContent = "Camera: " + (enabled ? "ON" : "OFF");
+  btn.classList.toggle("on", enabled);
+  btn.setAttribute("aria-pressed", String(enabled));
+  if (enabled) {
+    setCameraStatus("Starting…");
+    clearCameraFrame("Connecting to camera…");
+    cameraLoop(cameraRun);
+  } else {
+    setCameraStatus("");
+    clearCameraFrame("Camera off");
+    // Lets the bridge release the camera straight away
+    if (isConnected) fetch("/camera-stop", { method: "POST" }).catch(() => {});
+  }
+}
+
 // ─── Motion list from the robot ──────────────────────────────────────────────
 
 // "animations/Stand/Emotions/Positive/Happy_4" -> group "Emotions / Positive", label "Happy 4"
@@ -789,36 +906,235 @@ function motionGroupAndLabel(path) {
   };
 }
 
-function populateMotionSelect(select, animations, behaviors) {
-  const previous = select.value;
-  const groups = new Map();
-  [...animations, ...behaviors].forEach((path) => {
-    const { group, label } = motionGroupAndLabel(path);
-    if (!groups.has(group)) groups.set(group, []);
-    groups.get(group).push({ path, label });
-  });
+// ─── Motion picker (favourites + collapsible categories) ─────────────────────
 
-  const isApp = (g) => g.startsWith("App: ");
-  const groupNames = [...groups.keys()].sort((a, b) => isApp(a) - isApp(b) || a.localeCompare(b));
+const BUILTIN_MOTIONS = [
+  ["Dances", "Hey", "animations/Stand/Gestures/Hey_1"],
+  ["Dances", "Bow", "animations/Stand/Gestures/BowShort_1"],
+  ["Dances", "Enthusiastic", "animations/Stand/Gestures/Enthusiastic_4"],
+  ["Dances", "Excited", "animations/Stand/Gestures/Excited_1"],
+  ["Dances", "Wake Up", "animations/Stand/Waiting/WakeUp_1"],
+  ["Gestures", "Yes (nod)", "animations/Stand/Gestures/Yes_1"],
+  ["Gestures", "No (shake)", "animations/Stand/Gestures/No_1"],
+  ["Gestures", "Think", "animations/Stand/Gestures/Think_1"],
+  ["Gestures", "Explain", "animations/Stand/Gestures/Explain_1"],
+  ["Gestures", "Show Sky", "animations/Stand/Gestures/ShowSky_1"],
+  ["Emotions", "Happy", "animations/Stand/Emotions/Positive/Happy_4"],
+  ["Emotions", "Laugh", "animations/Stand/Emotions/Positive/Laugh_1"],
+  ["Emotions", "Sad", "animations/Stand/Emotions/Negative/Sad_1"],
+  ["Emotions", "Surprise", "animations/Stand/Emotions/Negative/Surprise_1"],
+  ["Emotions", "Ask for attention", "animations/Stand/Emotions/Neutral/AskForAttention_1"],
+  ["Reactions", "Shake body", "animations/Stand/Reactions/ShakeBody_1"],
+  ["Reactions", "See something", "animations/Stand/Reactions/SeeSomething_1"],
+  ["Reactions", "Touch head", "animations/Stand/Reactions/TouchHead_1"],
+].map(([category, label, path]) => ({ category, label, path }));
 
-  select.innerHTML = '<option value="">-- Select motion --</option>';
-  groupNames.forEach((name) => {
-    const optgroup = document.createElement("optgroup");
-    optgroup.label = name;
-    groups
-      .get(name)
-      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
-      .forEach(({ path, label }) => {
-        const option = document.createElement("option");
-        option.value = path;
-        option.textContent = label;
-        option.title = path;
-        optgroup.appendChild(option);
-      });
-    select.appendChild(optgroup);
-  });
-  if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+const FAVOURITES_STORAGE_KEY = "pepperFavouriteMotions";
+let motionCatalog = BUILTIN_MOTIONS; // [{ category, label, path }]
+let favouriteMotions = loadFavouriteMotions(); // Set of paths
+const motionPickers = [];
+
+function loadFavouriteMotions() {
+  try {
+    return new Set(JSON.parse(localStorage.getItem(FAVOURITES_STORAGE_KEY)) || []);
+  } catch (e) {
+    return new Set();
+  }
 }
+
+function toggleFavouriteMotion(path) {
+  if (!favouriteMotions.delete(path)) favouriteMotions.add(path);
+  try {
+    localStorage.setItem(FAVOURITES_STORAGE_KEY, JSON.stringify([...favouriteMotions]));
+  } catch (e) {
+    // favourites then only last for this page load
+  }
+  motionPickers.forEach(renderMotionPicker);
+}
+
+// Group "Emotions / Positive" + label "Happy 4" -> category "Emotions", label "Positive / Happy 4"
+function motionEntryFromPath(path) {
+  const { group, label } = motionGroupAndLabel(path);
+  const [category, ...sub] = group.split(" / ");
+  return { category, label: [...sub, label].join(" / "), path };
+}
+
+function motionEntry(path) {
+  return motionCatalog.find((m) => m.path === path) || motionEntryFromPath(path);
+}
+
+function buildMotionCatalog(animations, behaviors) {
+  const entries = [...animations, ...behaviors].map(motionEntryFromPath);
+  const isApp = (c) => c.startsWith("App: ");
+  return entries.sort(
+    (a, b) =>
+      isApp(a.category) - isApp(b.category) ||
+      a.category.localeCompare(b.category) ||
+      a.label.localeCompare(b.label, undefined, { numeric: true })
+  );
+}
+
+// Every search word must appear in the motion's label, category or path
+function motionMatchesSearch(entry, words) {
+  const text = `${entry.label} ${entry.category} ${entry.path}`.toLowerCase();
+  return words.every((word) => text.includes(word));
+}
+
+function motionSearchResults(picker) {
+  const words = picker.query.toLowerCase().split(/\s+/).filter(Boolean);
+  const extraFavourites = [...favouriteMotions]
+    .filter((path) => !motionCatalog.some((m) => m.path === path))
+    .map(motionEntry);
+  return [...motionCatalog, ...extraFavourites].filter((entry) => motionMatchesSearch(entry, words));
+}
+
+function createMotionPicker(root) {
+  const picker = { root, value: "", openCategory: null, query: "" };
+  // The search box sits outside the list so re-rendering the list keeps its focus
+  root.innerHTML = `
+    <button type="button" class="motion-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
+      <span class="motion-picker-value"></span><span class="motion-picker-caret">▾</span>
+    </button>
+    <div class="motion-picker-menu" hidden>
+      <label class="motion-picker-search">
+        <span class="motion-picker-search-icon" aria-hidden="true">🔍</span>
+        <input type="search" placeholder="Search motions…" aria-label="Search motions" autocomplete="off" />
+      </label>
+      <div class="motion-picker-list" role="listbox"></div>
+    </div>`;
+  picker.trigger = root.querySelector(".motion-picker-trigger");
+  picker.menu = root.querySelector(".motion-picker-menu");
+  picker.search = root.querySelector(".motion-picker-search input");
+  picker.list = root.querySelector(".motion-picker-list");
+
+  picker.trigger.addEventListener("click", () => setMotionPickerOpen(picker, picker.menu.hidden));
+  picker.search.addEventListener("input", () => {
+    picker.query = picker.search.value.trim();
+    picker.list.scrollTop = 0;
+    renderMotionPicker(picker);
+  });
+  picker.search.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" || !picker.query) return;
+    e.preventDefault();
+    const [first] = motionSearchResults(picker);
+    if (!first) return;
+    setMotionPickerValue(picker, first.path);
+    setMotionPickerOpen(picker, false);
+    picker.trigger.focus();
+  });
+  picker.menu.addEventListener("click", (e) => {
+    const el = e.target.closest("[data-action]");
+    if (!el) return;
+    const { action, path, category } = el.dataset;
+    if (action === "star") {
+      toggleFavouriteMotion(path);
+    } else if (action === "category") {
+      picker.openCategory = picker.openCategory === category ? null : category;
+      renderMotionPicker(picker);
+    } else if (action === "choose") {
+      setMotionPickerValue(picker, path);
+      setMotionPickerOpen(picker, false);
+      picker.trigger.focus();
+    }
+  });
+  motionPickers.push(picker);
+  renderMotionPicker(picker);
+  return picker;
+}
+
+function setMotionPickerValue(picker, path) {
+  picker.value = path;
+  renderMotionPicker(picker);
+}
+
+function setMotionPickerOpen(picker, open) {
+  if (open) {
+    motionPickers.forEach((p) => p !== picker && setMotionPickerOpen(p, false));
+    // Show the selected motion's category straight away
+    if (picker.value) picker.openCategory = motionEntry(picker.value).category;
+  }
+  // Each opening starts with an empty search
+  picker.query = "";
+  picker.search.value = "";
+  picker.menu.hidden = !open;
+  picker.trigger.setAttribute("aria-expanded", String(open));
+  picker.root.classList.toggle("open", open);
+  renderMotionPicker(picker);
+  if (open) picker.search.focus();
+}
+
+function motionItemHtml(picker, entry, showCategory = false) {
+  const fav = favouriteMotions.has(entry.path);
+  const path = escapeHtml(entry.path);
+  const category = showCategory ? `<span class="motion-picker-item-category">${escapeHtml(entry.category)}</span>` : "";
+  return `
+    <div class="motion-picker-item${entry.path === picker.value ? " selected" : ""}">
+      <button type="button" class="motion-picker-star${fav ? " fav" : ""}" data-action="star" data-path="${path}"
+        title="${fav ? "Remove from favourites" : "Add to favourites"}" aria-pressed="${fav}">${fav ? "★" : "☆"}</button>
+      <button type="button" class="motion-picker-choose" data-action="choose" data-path="${path}" title="${path}">${escapeHtml(entry.label)}${category}</button>
+    </div>`;
+}
+
+function renderMotionPicker(picker) {
+  const valueEl = picker.trigger.querySelector(".motion-picker-value");
+  if (picker.value) {
+    const entry = motionEntry(picker.value);
+    valueEl.textContent = (favouriteMotions.has(picker.value) ? "★ " : "") + entry.label;
+    valueEl.classList.remove("placeholder");
+  } else {
+    valueEl.textContent = "-- Select motion --";
+    valueEl.classList.add("placeholder");
+  }
+  if (picker.menu.hidden) return;
+
+  if (picker.query) {
+    const results = motionSearchResults(picker);
+    picker.list.innerHTML = results.length
+      ? `<div class="motion-picker-heading">${results.length} match${results.length === 1 ? "" : "es"}</div>` +
+        results.map((entry) => motionItemHtml(picker, entry, true)).join("")
+      : '<div class="motion-picker-empty">No motions match</div>';
+    return;
+  }
+
+  const favourites = [...favouriteMotions]
+    .map(motionEntry)
+    .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }));
+  const categories = new Map();
+  motionCatalog.forEach((entry) => {
+    if (!categories.has(entry.category)) categories.set(entry.category, []);
+    categories.get(entry.category).push(entry);
+  });
+
+  let html = '<div class="motion-picker-heading">★ Favourites</div>';
+  html += favourites.length
+    ? favourites.map((entry) => motionItemHtml(picker, entry)).join("")
+    : '<div class="motion-picker-empty">Click ☆ next to a motion to add it here</div>';
+  html += '<div class="motion-picker-heading">Categories</div>';
+  categories.forEach((entries, category) => {
+    const open = picker.openCategory === category;
+    html += `
+      <button type="button" class="motion-picker-category${open ? " open" : ""}" data-action="category"
+        data-category="${escapeHtml(category)}" aria-expanded="${open}">
+        <span class="motion-picker-arrow">▸</span>${escapeHtml(category)}<span class="motion-picker-count">${entries.length}</span>
+      </button>`;
+    if (open) {
+      html += `<div class="motion-picker-sub">${entries.map((entry) => motionItemHtml(picker, entry)).join("")}</div>`;
+    }
+  });
+  const scroll = picker.list.scrollTop;
+  picker.list.innerHTML = html;
+  picker.list.scrollTop = scroll;
+}
+
+document.addEventListener("pointerdown", (e) => {
+  motionPickers.forEach((p) => !p.menu.hidden && !p.root.contains(e.target) && setMotionPickerOpen(p, false));
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") motionPickers.forEach((p) => !p.menu.hidden && setMotionPickerOpen(p, false));
+});
+
+const motionPicker = createMotionPicker(document.getElementById("motionSelect"));
+const timelineMotionPicker = createMotionPicker(document.getElementById("timelineMotionSelect"));
 
 async function loadMotionsFromRobot() {
   const status = document.getElementById("motionListStatus");
@@ -833,8 +1149,8 @@ async function loadMotionsFromRobot() {
     const r = await fetch("/list-motions", { method: "POST" });
     const data = await r.json();
     if (!data.success) throw new Error(data.error || "Unknown error");
-    populateMotionSelect(document.getElementById("motionSelect"), data.animations, data.behaviors);
-    populateMotionSelect(document.getElementById("timelineMotionSelect"), data.animations, data.behaviors);
+    motionCatalog = buildMotionCatalog(data.animations, data.behaviors);
+    motionPickers.forEach(renderMotionPicker);
     status.textContent = `${data.animations.length + data.behaviors.length} motions from the robot`;
     status.title = `${data.animations.length} standard animations + ${data.behaviors.length} animations from installed apps`;
   } catch (error) {
@@ -847,9 +1163,7 @@ async function loadMotionsFromRobot() {
 // ─── Sequence Builder ────────────────────────────────────────────────────────
 
 function getMotionDisplayName(motionValue) {
-  const select = document.getElementById("timelineMotionSelect");
-  const option = [...select.options].find((o) => o.value === motionValue);
-  return option ? option.textContent : motionValue.split("/").pop();
+  return motionEntry(motionValue).label;
 }
 
 function nextBlockId() {
@@ -920,8 +1234,7 @@ function addDelayBlock() {
 }
 
 function addMotionBlock() {
-  const select = document.getElementById("timelineMotionSelect");
-  const motionValue = select.value;
+  const motionValue = timelineMotionPicker.value;
 
   if (!motionValue) {
     alert("Please select a motion first.");
@@ -929,7 +1242,7 @@ function addMotionBlock() {
   }
 
   if (addBlock({ type: "motion", motion: motionValue, displayName: getMotionDisplayName(motionValue) })) {
-    select.value = "";
+    setMotionPickerValue(timelineMotionPicker, "");
   }
 }
 
@@ -1421,6 +1734,12 @@ document.querySelectorAll(".drive-key").forEach((btn) => {
   btn.addEventListener("pointerup", release);
   btn.addEventListener("pointercancel", release);
   btn.addEventListener("lostpointercapture", release);
+});
+
+// Camera event listeners
+document.getElementById("cameraToggleBtn").addEventListener("click", (e) => {
+  setCameraEnabled(!cameraOn);
+  e.currentTarget.blur(); // so Space can't re-toggle it
 });
 
 // Robot control event listeners
