@@ -41,8 +41,12 @@ let currentImageData = null;
 let timelineBlocks = [];
 let isPlaying = false;
 let playbackAborted = false;
+let blockStates = {}; // block id -> { state: "playing"|"done"|"error"|"stopped", error }
+let blockIdCounter = 0;
 let isConnected = false;
-let autoReconnecting = false;
+let bridgeReconnecting = false; // bridge lost the robot and is reconnecting on its own
+let connectInFlight = false; // a /connect request (manual or automatic) is running
+let lastClientReconnect = 0;
 let lastConnectedHostIp = null;
 let lastConnectedPepperIp = null;
 
@@ -83,6 +87,7 @@ async function emergencyStop() {
 
   const btn = document.getElementById("emergencyStopBtn");
   btn.disabled = true;
+  setDriveEnabled(false);
 
   try {
     const response = await fetch("/emergency-stop", { method: "POST" });
@@ -117,6 +122,69 @@ function updateRobotStatus(status) {
   }
 }
 
+// ─── Volume / Pitch / Brightness ─────────────────────────────────────────────
+
+const SLIDERS = {
+  volume: { slider: "volumeSlider", label: "volumeValue", endpoint: "/set-volume", format: (v) => v + "%" },
+  pitch: { slider: "pitchSlider", label: "pitchValue", endpoint: "/set-pitch", format: (v) => v + "%" },
+  brightness: { slider: "brightnessSlider", label: "brightnessValue", endpoint: "/set-brightness", format: (v) => v + "%" },
+};
+const sliderTimers = {};
+
+function setSlidersEnabled(enabled) {
+  Object.values(SLIDERS).forEach((cfg) => {
+    document.getElementById(cfg.slider).disabled = !enabled;
+    if (!enabled) document.getElementById(cfg.label).textContent = "–";
+  });
+}
+
+async function loadRobotSettings() {
+  try {
+    const r = await fetch("/settings");
+    const data = await r.json();
+    if (!data.success) throw new Error(data.error || "Unknown error");
+    if (typeof data.obstacleAvoidance === "boolean") {
+      obstacleAvoidance = data.obstacleAvoidance;
+      renderAvoidance();
+      // e.g. the connection dropped while it was off: restore the safe default
+      if (!obstacleAvoidance && !driveEnabled) setObstacleAvoidance(true);
+    }
+    Object.entries(SLIDERS).forEach(([key, cfg]) => {
+      const slider = document.getElementById(cfg.slider);
+      if (data[key] !== null && data[key] !== undefined) slider.value = data[key];
+      document.getElementById(cfg.label).textContent = cfg.format(slider.value);
+      slider.disabled = false;
+    });
+  } catch (error) {
+    logError("Robot settings", error.message);
+  }
+}
+
+async function sendSliderValue(key) {
+  const cfg = SLIDERS[key];
+  const value = parseInt(document.getElementById(cfg.slider).value);
+  try {
+    const r = await postJson(cfg.endpoint, { value });
+    const result = await r.json();
+    if (!result.success) logError(`Set ${key}`, result.error || "Unknown error");
+  } catch (error) {
+    logError(`Set ${key}`, error.message);
+  }
+}
+
+// Live-update while dragging, but at most one request per 150 ms per slider
+function onSliderInput(key) {
+  const cfg = SLIDERS[key];
+  document.getElementById(cfg.label).textContent = cfg.format(document.getElementById(cfg.slider).value);
+  clearTimeout(sliderTimers[key]);
+  sliderTimers[key] = setTimeout(() => sendSliderValue(key), 150);
+}
+
+function onConnected() {
+  loadRobotSettings();
+  loadMotionsFromRobot();
+}
+
 // ─── Connection ──────────────────────────────────────────────────────────────
 
 function updateConnectionStatus(status, message) {
@@ -140,83 +208,120 @@ function updateIpDisplay(hostIp, pepperIp) {
   }
 }
 
-async function autoReconnect() {
-  if (autoReconnecting) return false;
-  if (!lastConnectedHostIp || !lastConnectedPepperIp) return false;
+function setConnectButton(connected) {
+  const btn = document.getElementById("connectBtn");
+  btn.textContent = connected ? "Disconnect" : "Connect";
+  btn.classList.toggle("disconnect", connected);
+}
 
-  autoReconnecting = true;
-  console.log("Auto-reconnecting to Pepper...");
-  updateConnectionStatus("connecting", "Reconnecting to Pepper...");
+// Remember the robot across page reloads and bridge restarts
+const CONNECTION_STORAGE_KEY = "pepperConnection";
 
+function saveConnection(hostIp, pepperIp, wanted) {
   try {
-    const response = await fetch("/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        hostIp: lastConnectedHostIp,
-        pepperIp: lastConnectedPepperIp,
-      }),
-    });
-    const result = await response.json();
+    localStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify({ hostIp, pepperIp, wanted }));
+  } catch (e) {}
+}
 
-    if (result.success) {
-      isConnected = true;
-      updateConnectionStatus("connected", "Connected to Pepper (auto-reconnected)");
-      updateIpDisplay(lastConnectedHostIp, lastConnectedPepperIp);
-      document.getElementById("connectBtn").textContent = "Disconnect";
-      document.getElementById("connectBtn").classList.add("disconnect");
-      console.log("Auto-reconnect successful");
-      autoReconnecting = false;
-      return true;
-    } else {
-      isConnected = false;
-      updateConnectionStatus("error", "Auto-reconnect failed: " + result.error);
-      logError("Auto-reconnect", result.error);
-      autoReconnecting = false;
-      return false;
-    }
-  } catch (error) {
-    isConnected = false;
-    updateConnectionStatus("error", "Auto-reconnect error: " + error.message);
-    logError("Auto-reconnect", error.message);
-    autoReconnecting = false;
-    return false;
+function loadConnection() {
+  try {
+    return JSON.parse(localStorage.getItem(CONNECTION_STORAGE_KEY)) || {};
+  } catch (e) {
+    return {};
   }
 }
 
-async function checkConnectionStatus() {
-  try {
-    const response = await fetch("/status");
-    const data = await response.json();
+function markDisconnected() {
+  if (!isConnected) return;
+  isConnected = false;
+  setSlidersEnabled(false);
+  setDriveEnabled(false);
+}
 
-    if (data.connected) {
-      isConnected = true;
-      updateConnectionStatus("connected", "Connected to Pepper");
-      updateIpDisplay(data.hostIp, data.pepperIp);
-      document.getElementById("hostIp").value = data.hostIp || "";
-      setPepperIp(data.pepperIp || "");
-      lastConnectedHostIp = data.hostIp;
-      lastConnectedPepperIp = data.pepperIp;
-      document.getElementById("connectBtn").textContent = "Disconnect";
-      document.getElementById("connectBtn").classList.add("disconnect");
+function markConnected(hostIp, pepperIp, message) {
+  lastConnectedHostIp = hostIp;
+  lastConnectedPepperIp = pepperIp;
+  saveConnection(hostIp, pepperIp, true);
+  updateConnectionStatus("connected", message);
+  updateIpDisplay(hostIp, pepperIp);
+  setConnectButton(true);
+  const wasConnected = isConnected;
+  isConnected = true;
+  if (!wasConnected) onConnected();
+}
+
+// Used when the bridge itself was restarted and no longer knows the robot
+async function clientReconnect() {
+  if (connectInFlight || Date.now() - lastClientReconnect < 10000) return;
+  const { hostIp, pepperIp } = loadConnection();
+  if (!hostIp || !pepperIp) return;
+  connectInFlight = true;
+  lastClientReconnect = Date.now();
+  updateConnectionStatus("connecting", "Bridge restarted — reconnecting to Pepper automatically…");
+  setConnectButton(true);
+  try {
+    const r = await postJson("/connect", { hostIp, pepperIp, reconnect: true });
+    const result = await r.json();
+    if (result.success && !loadConnection().wanted) {
+      // Cancelled while this connect was in flight
+      fetch("/disconnect", { method: "POST" }).catch(() => {});
+    } else if (result.success) {
+      markConnected(hostIp, pepperIp, "Connected to Pepper (reconnected automatically)");
     } else {
-      if (isConnected && lastConnectedHostIp && lastConnectedPepperIp) {
-        console.log("Connection dropped — triggering auto-reconnect");
-        isConnected = false;
-        await autoReconnect();
-      } else {
-        isConnected = false;
-        updateConnectionStatus(
-          "disconnected",
-          "Not connected — enter IP addresses above and click Connect",
-        );
-        updateIpDisplay(null, null);
-        document.getElementById("connectBtn").textContent = "Connect";
-        document.getElementById("connectBtn").classList.remove("disconnect");
-      }
+      updateConnectionStatus("connecting", `Reconnect failed (${result.error}) — retrying…`);
     }
   } catch (error) {
-    console.error("Status check error:", error);
+    updateConnectionStatus("error", "Can't reach the bridge server (bridge.py) — retrying…");
+  }
+  connectInFlight = false;
+}
+
+async function checkConnectionStatus() {
+  if (connectInFlight) return; // a connect is running; its result updates the UI
+  let data;
+  try {
+    const response = await fetch("/status");
+    data = await response.json();
+  } catch (error) {
+    // The bridge process is down or unreachable; keep polling until it's back
+    markDisconnected();
+    bridgeReconnecting = false;
+    if (loadConnection().wanted) {
+      updateConnectionStatus("error", "Can't reach the bridge server (bridge.py) — retrying…");
+    }
+    return;
+  }
+  if (connectInFlight) return;
+
+  if (data.connected) {
+    if (typeof data.awake === "boolean") updateRobotStatus(data.awake ? "awake" : "resting");
+    const recovered = bridgeReconnecting || !isConnected;
+    bridgeReconnecting = false;
+    document.getElementById("hostIp").value = data.hostIp || "";
+    setPepperIp(data.pepperIp || "");
+    markConnected(
+      data.hostIp,
+      data.pepperIp,
+      recovered && lastConnectedPepperIp ? "Connected to Pepper (reconnected automatically)" : "Connected to Pepper",
+    );
+  } else if (data.reconnecting) {
+    markDisconnected();
+    bridgeReconnecting = true;
+    const attempt = data.attempts ? ` (attempt ${data.attempts})` : "";
+    const reason = data.lastError ? ` — ${data.lastError}` : "";
+    updateConnectionStatus("connecting", `Connection lost — reconnecting automatically${attempt}${reason}`);
+    updateIpDisplay(data.hostIp, data.pepperIp);
+    setConnectButton(true); // lets the user cancel reconnecting
+  } else if (!data.pepperIp && loadConnection().wanted) {
+    markDisconnected();
+    bridgeReconnecting = false;
+    clientReconnect();
+  } else {
+    markDisconnected();
+    bridgeReconnecting = false;
+    updateConnectionStatus("disconnected", "Not connected — enter IP addresses above and click Connect");
+    updateIpDisplay(null, null);
+    setConnectButton(false);
   }
 }
 
@@ -245,49 +350,45 @@ async function connect() {
 
   updateConnectionStatus("connecting", "Connecting to Pepper...");
   document.getElementById("connectBtn").disabled = true;
+  connectInFlight = true;
 
   try {
-    const response = await fetch("/connect", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ hostIp, pepperIp }),
-    });
-
-    const result = await response.json();
+    const result = await (await postJson("/connect", { hostIp, pepperIp })).json();
 
     if (result.success) {
-      isConnected = true;
-      lastConnectedHostIp = hostIp;
-      lastConnectedPepperIp = pepperIp;
-      updateConnectionStatus("connected", "Connected to Pepper");
-      updateIpDisplay(hostIp, pepperIp);
-      document.getElementById("connectBtn").textContent = "Disconnect";
-      document.getElementById("connectBtn").classList.add("disconnect");
+      bridgeReconnecting = false;
+      markConnected(hostIp, pepperIp, "Connected to Pepper");
     } else {
+      saveConnection(hostIp, pepperIp, false);
       updateConnectionStatus("error", "Connection failed: " + result.error);
     }
   } catch (error) {
     updateConnectionStatus("error", "Connection error: " + error.message);
   }
 
+  connectInFlight = false;
   document.getElementById("connectBtn").disabled = false;
 }
 
 async function disconnect() {
+  setDriveEnabled(false);
+  const { hostIp, pepperIp } = loadConnection();
+  saveConnection(hostIp, pepperIp, false); // don't auto-reconnect after this
   try {
     await fetch("/disconnect", { method: "POST" });
     isConnected = false;
+    bridgeReconnecting = false;
+    setSlidersEnabled(false);
     updateConnectionStatus("disconnected", "Disconnected");
     updateIpDisplay(null, null);
-    document.getElementById("connectBtn").textContent = "Connect";
-    document.getElementById("connectBtn").classList.remove("disconnect");
+    setConnectButton(false);
   } catch (error) {
     logError("Disconnect", error.message);
   }
 }
 
 function toggleConnection() {
-  if (isConnected) {
+  if (isConnected || bridgeReconnecting || connectInFlight) {
     disconnect();
   } else {
     connect();
@@ -296,13 +397,17 @@ function toggleConnection() {
 
 // ─── Startup ─────────────────────────────────────────────────────────────────
 
-window.addEventListener("load", checkConnectionStatus);
+window.addEventListener("load", () => {
+  // Pre-fill the last used addresses
+  const saved = loadConnection();
+  if (saved.hostIp && !document.getElementById("hostIp").value) document.getElementById("hostIp").value = saved.hostIp;
+  if (saved.pepperIp && !getPepperIp()) setPepperIp(saved.pepperIp);
+  checkConnectionStatus();
+});
 
-setInterval(() => {
-  if (isConnected) {
-    checkConnectionStatus();
-  }
-}, 5000);
+// Poll all the time (not only while connected) so drops, automatic
+// reconnects and bridge restarts are always reflected
+setInterval(checkConnectionStatus, 3000);
 
 // ─── Instant Send ────────────────────────────────────────────────────────────
 
@@ -343,16 +448,24 @@ async function sendTextToTablet() {
   }
 }
 
+// Removes everything from the tablet (text, image, video, webview)
 async function clearScreen() {
   try {
-    const r = await fetch("/send?text=");
-    if (!r.ok) logError("Clear Screen", await r.text());
+    const r = await fetch("/clear-tablet", { method: "POST" });
+    const result = await r.json();
+    if (!result.success) logError("Clear Tablet", result.error || "Unknown error");
   } catch (error) {
-    logError("Clear Screen", error.message);
+    logError("Clear Tablet", error.message);
   }
 }
 
-function handleImageFile(file) {
+// Pepper's tablet panel is 1280x800 physical pixels, so larger images are
+// downscaled to fit it (keeping aspect ratio) before being sent. The tablet
+// page then scales the image up/down to fill the screen.
+const TABLET_W = 1280;
+const TABLET_H = 800;
+
+function loadImageForTablet(file, callback) {
   if (!file || !file.type.match(/image\/(jpeg|jpg|png)/)) {
     alert("Please select a JPG or PNG image.");
     return;
@@ -360,29 +473,38 @@ function handleImageFile(file) {
 
   const img = new Image();
   img.onload = () => {
-    const MAX_W = 1280,
-      MAX_H = 800;
     let w = img.width,
       h = img.height;
-    if (w > MAX_W || h > MAX_H) {
-      const scale = Math.min(MAX_W / w, MAX_H / h);
+    if (w > TABLET_W || h > TABLET_H) {
+      const scale = Math.min(TABLET_W / w, TABLET_H / h);
       w = Math.round(w * scale);
       h = Math.round(h * scale);
     }
     const canvas = document.createElement("canvas");
     canvas.width = w;
     canvas.height = h;
-    canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-    currentImageData = canvas.toDataURL("image/jpeg", 0.8);
-    document.getElementById("previewImg").src = currentImageData;
-    document.getElementById("dropZone").style.display = "none";
-    document.getElementById("imagePreview").style.display = "block";
+    const ctx = canvas.getContext("2d");
+    // JPEG has no alpha: paint white first so transparent PNGs don't turn black
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, w, h);
+    ctx.drawImage(img, 0, 0, w, h);
+    callback(canvas.toDataURL("image/jpeg", 0.85));
   };
+  img.onerror = () => alert("Could not read that image file.");
   const reader = new FileReader();
   reader.onload = (e) => {
     img.src = e.target.result;
   };
   reader.readAsDataURL(file);
+}
+
+function handleImageFile(file) {
+  loadImageForTablet(file, (dataUrl) => {
+    currentImageData = dataUrl;
+    document.getElementById("previewImg").src = currentImageData;
+    document.getElementById("dropZone").style.display = "none";
+    document.getElementById("imagePreview").style.display = "block";
+  });
 }
 
 async function sendImage() {
@@ -407,15 +529,6 @@ function removeImage() {
   document.getElementById("dropZone").style.display = "";
 }
 
-async function clearImage() {
-  try {
-    const r = await fetch("/send?text=");
-    if (!r.ok) logError("Clear", await r.text());
-  } catch (error) {
-    logError("Clear", error.message);
-  }
-}
-
 async function playMotion() {
   const select = document.getElementById("motionSelect");
   const motionValue = select.value;
@@ -438,6 +551,8 @@ async function playMotion() {
 }
 
 async function stopMotion() {
+  driveHeld.clear(); // the bridge also stops the wheels
+  updateDriveUi();
   try {
     const response = await fetch("/stop-motion", { method: "POST" });
     if (!response.ok) logError("Stop Motion", await response.text());
@@ -446,12 +561,312 @@ async function stopMotion() {
   }
 }
 
+// ─── Keyboard driving ────────────────────────────────────────────────────────
+
+const DRIVE_KEYS = ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"];
+const DRIVE_HEARTBEAT_MS = 200; // bridge stops the wheels after 600 ms of silence
+
+let driveEnabled = false;
+const driveHeld = new Set(); // arrow keys currently held (keyboard or on-screen pad)
+let driveShift = false;
+let driveInFlight = false;
+let driveQueued = false;
+let driveLastError = "";
+let obstacleAvoidance = true;
+
+function driveCommand() {
+  const up = driveHeld.has("ArrowUp") ? 1 : 0;
+  const down = driveHeld.has("ArrowDown") ? 1 : 0;
+  const left = driveHeld.has("ArrowLeft") ? 1 : 0;
+  const right = driveHeld.has("ArrowRight") ? 1 : 0;
+  const side = left - right;
+  return {
+    x: up - down,
+    y: driveShift ? side : 0,
+    theta: driveShift ? 0 : side,
+  };
+}
+
+function isMoving(cmd) {
+  return cmd.x !== 0 || cmd.y !== 0 || cmd.theta !== 0;
+}
+
+function describeDrive(cmd) {
+  const parts = [];
+  if (cmd.x > 0) parts.push("forward");
+  if (cmd.x < 0) parts.push("backward");
+  if (cmd.y > 0) parts.push("sliding left");
+  if (cmd.y < 0) parts.push("sliding right");
+  if (cmd.theta > 0) parts.push("turning left");
+  if (cmd.theta < 0) parts.push("turning right");
+  return parts.join(" + ");
+}
+
+function setDriveStatus(state, text) {
+  const el = document.getElementById("driveStatus");
+  el.className = "drive-status " + state;
+  el.textContent = text;
+}
+
+function updateDriveUi() {
+  const cmd = driveCommand();
+  document.querySelectorAll(".drive-key").forEach((btn) => {
+    btn.classList.toggle("active", driveHeld.has(btn.dataset.key));
+  });
+  if (!driveEnabled) {
+    setDriveStatus("off", "Off");
+  } else if (driveLastError) {
+    setDriveStatus("error", driveLastError);
+  } else if (isMoving(cmd)) {
+    setDriveStatus("moving", "Driving: " + describeDrive(cmd));
+  } else {
+    setDriveStatus("ready", "Ready — hold an arrow key");
+  }
+}
+
+// Sends the current command; never more than one request in flight
+async function sendDrive() {
+  if (driveInFlight) {
+    driveQueued = true;
+    return;
+  }
+  driveInFlight = true;
+  // Belt and braces: once driving is switched off only a stop can be sent
+  const cmd = driveEnabled ? driveCommand() : { x: 0, y: 0, theta: 0 };
+  const speed = parseInt(document.getElementById("driveSpeedSlider").value) / 100;
+  try {
+    const r = await postJson("/drive", { ...cmd, speed });
+    const result = await r.json();
+    if (!result.success) throw new Error(result.error || "Unknown error");
+    if (isMoving(cmd)) driveLastError = ""; // keep showing an error until a move succeeds
+  } catch (error) {
+    if (error.message !== driveLastError) logError("Drive", error.message);
+    driveLastError = error.message;
+    driveHeld.clear(); // don't keep retrying a failing move
+  }
+  driveInFlight = false;
+  updateDriveUi();
+  if (driveQueued) {
+    driveQueued = false;
+    sendDrive();
+  }
+}
+
+function driveStop() {
+  driveHeld.clear();
+  updateDriveUi();
+  if (driveEnabled) sendDrive();
+}
+
+function renderAvoidance() {
+  const btn = document.getElementById("avoidanceToggleBtn");
+  btn.textContent = "Obstacle avoidance: " + (obstacleAvoidance ? "ON" : "OFF");
+  btn.classList.toggle("on", obstacleAvoidance);
+  btn.setAttribute("aria-pressed", String(obstacleAvoidance));
+  btn.disabled = !driveEnabled;
+  document.getElementById("avoidanceWarning").hidden = obstacleAvoidance;
+}
+
+async function setObstacleAvoidance(enabled) {
+  try {
+    const result = await (await postJson("/set-obstacle-avoidance", { enabled })).json();
+    if (!result.success) throw new Error(result.error || "Unknown error");
+    obstacleAvoidance = enabled;
+  } catch (error) {
+    logError("Obstacle avoidance", error.message);
+    if (!enabled) alert(error.message);
+  }
+  renderAvoidance();
+}
+
+function toggleObstacleAvoidance() {
+  if (!driveEnabled) return;
+  if (
+    obstacleAvoidance &&
+    !confirm("Turn OFF obstacle avoidance?\n\nPepper will drive into people, walls and objects without stopping. Only do this in a clear area.")
+  ) {
+    return;
+  }
+  setObstacleAvoidance(!obstacleAvoidance);
+}
+
+function setDriveEnabled(enabled) {
+  if (enabled && !isConnected) {
+    alert("Connect to Pepper first.");
+    return;
+  }
+  const wasEnabled = driveEnabled;
+  driveEnabled = enabled;
+  driveHeld.clear();
+  driveShift = false;
+  driveLastError = "";
+  const btn = document.getElementById("driveToggleBtn");
+  btn.textContent = "Keyboard driving: " + (enabled ? "ON" : "OFF");
+  btn.classList.toggle("on", enabled);
+  btn.setAttribute("aria-pressed", String(enabled));
+  document.getElementById("drivePanel").classList.toggle("enabled", enabled);
+  if (enabled) {
+    // Arrow keys would otherwise go to whatever field has focus
+    if (document.activeElement) document.activeElement.blur();
+  } else if (wasEnabled && isConnected) {
+    fetch("/drive-stop", { method: "POST" }).catch(() => {});
+    if (!obstacleAvoidance) setObstacleAvoidance(true); // "off" only lasts while driving
+  }
+  renderAvoidance();
+  updateDriveUi();
+}
+
+// Arrow keys typed into a text field stay with that field
+function isTypingTarget(el) {
+  if (!el) return false;
+  if (el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable) return true;
+  return el.tagName === "INPUT" && !["range", "button", "checkbox", "color", "file"].includes(el.type);
+}
+
+function onDriveKeyDown(e) {
+  if (!driveEnabled || isTypingTarget(e.target)) return;
+  if (e.key === " " || e.key === "Escape") {
+    e.preventDefault();
+    driveStop();
+    return;
+  }
+  if (e.key === "Shift") {
+    driveShift = true;
+  } else if (DRIVE_KEYS.includes(e.key)) {
+    e.preventDefault(); // no page scrolling / slider changes while driving
+    driveShift = e.shiftKey;
+    if (driveHeld.has(e.key)) return; // key auto-repeat
+    driveHeld.add(e.key);
+  } else {
+    return;
+  }
+  updateDriveUi();
+  sendDrive();
+}
+
+function onDriveKeyUp(e) {
+  if (!driveEnabled) return;
+  if (e.key === "Shift") {
+    driveShift = false;
+  } else if (DRIVE_KEYS.includes(e.key)) {
+    e.preventDefault();
+    if (!driveHeld.delete(e.key)) return;
+  } else {
+    return;
+  }
+  updateDriveUi();
+  sendDrive();
+}
+
+window.addEventListener("keydown", onDriveKeyDown, true);
+window.addEventListener("keyup", onDriveKeyUp, true);
+// Stop if the page loses focus (key-up events would be missed)
+window.addEventListener("blur", () => driveEnabled && driveStop());
+document.addEventListener("visibilitychange", () => document.hidden && driveEnabled && driveStop());
+
+// Keep the watchdog fed while a key is held
+setInterval(() => {
+  if (driveEnabled && isMoving(driveCommand())) sendDrive();
+}, DRIVE_HEARTBEAT_MS);
+
+// ─── Motion list from the robot ──────────────────────────────────────────────
+
+// "animations/Stand/Emotions/Positive/Happy_4" -> group "Emotions / Positive", label "Happy 4"
+// "boston_animation_library/Stand/bye_02" -> group "boston_animation_library", label "Stand / bye 02"
+function motionGroupAndLabel(path) {
+  const parts = path.split("/");
+  const prettify = (s) => s.replace(/_/g, " ");
+  if (parts[0] === "animations") {
+    const rest = parts[1] === "Stand" ? parts.slice(2) : parts.slice(1);
+    return {
+      group: rest.length > 1 ? rest.slice(0, -1).join(" / ") : "Other",
+      label: prettify(rest[rest.length - 1]),
+    };
+  }
+  return {
+    group: "App: " + parts[0],
+    label: parts.slice(1).map(prettify).join(" / ") || parts[0],
+  };
+}
+
+function populateMotionSelect(select, animations, behaviors) {
+  const previous = select.value;
+  const groups = new Map();
+  [...animations, ...behaviors].forEach((path) => {
+    const { group, label } = motionGroupAndLabel(path);
+    if (!groups.has(group)) groups.set(group, []);
+    groups.get(group).push({ path, label });
+  });
+
+  const isApp = (g) => g.startsWith("App: ");
+  const groupNames = [...groups.keys()].sort((a, b) => isApp(a) - isApp(b) || a.localeCompare(b));
+
+  select.innerHTML = '<option value="">-- Select motion --</option>';
+  groupNames.forEach((name) => {
+    const optgroup = document.createElement("optgroup");
+    optgroup.label = name;
+    groups
+      .get(name)
+      .sort((a, b) => a.label.localeCompare(b.label, undefined, { numeric: true }))
+      .forEach(({ path, label }) => {
+        const option = document.createElement("option");
+        option.value = path;
+        option.textContent = label;
+        option.title = path;
+        optgroup.appendChild(option);
+      });
+    select.appendChild(optgroup);
+  });
+  if ([...select.options].some((o) => o.value === previous)) select.value = previous;
+}
+
+async function loadMotionsFromRobot() {
+  const status = document.getElementById("motionListStatus");
+  const btn = document.getElementById("reloadMotionsBtn");
+  if (!isConnected) {
+    alert("Connect to Pepper first.");
+    return;
+  }
+  btn.disabled = true;
+  status.textContent = "Loading…";
+  try {
+    const r = await fetch("/list-motions", { method: "POST" });
+    const data = await r.json();
+    if (!data.success) throw new Error(data.error || "Unknown error");
+    populateMotionSelect(document.getElementById("motionSelect"), data.animations, data.behaviors);
+    populateMotionSelect(document.getElementById("timelineMotionSelect"), data.animations, data.behaviors);
+    status.textContent = `${data.animations.length + data.behaviors.length} motions from the robot`;
+    status.title = `${data.animations.length} standard animations + ${data.behaviors.length} animations from installed apps`;
+  } catch (error) {
+    status.textContent = "Could not load from robot — built-in list";
+    logError("Load motions", error.message);
+  }
+  btn.disabled = false;
+}
+
 // ─── Sequence Builder ────────────────────────────────────────────────────────
 
 function getMotionDisplayName(motionValue) {
   const select = document.getElementById("timelineMotionSelect");
-  const option = select.querySelector(`option[value="${motionValue}"]`);
+  const option = [...select.options].find((o) => o.value === motionValue);
   return option ? option.textContent : motionValue.split("/").pop();
+}
+
+function nextBlockId() {
+  blockIdCounter += 1;
+  return Date.now() * 1000 + (blockIdCounter % 1000);
+}
+
+function addBlock(block) {
+  if (isPlaying) {
+    alert("Stop the timeline before editing it.");
+    return false;
+  }
+  block.id = nextBlockId();
+  timelineBlocks.push(block);
+  resetBlockStates();
+  renderTimeline();
+  return true;
 }
 
 function addSpeechBlock() {
@@ -461,10 +876,9 @@ function addSpeechBlock() {
     return;
   }
 
-  const block = { type: "speech", text: text, id: Date.now() };
-  timelineBlocks.push(block);
-  document.getElementById("timelineSpeech").value = "";
-  renderTimeline();
+  if (addBlock({ type: "speech", text: text })) {
+    document.getElementById("timelineSpeech").value = "";
+  }
 }
 
 function addTextBlock() {
@@ -474,16 +888,9 @@ function addTextBlock() {
     return;
   }
 
-  const block = {
-    type: "text",
-    text: text,
-    fontSize: currentFontSize,
-    color: currentColor,
-    id: Date.now(),
-  };
-  timelineBlocks.push(block);
-  document.getElementById("timelineText").value = "";
-  renderTimeline();
+  if (addBlock({ type: "text", text: text, fontSize: currentFontSize, color: currentColor })) {
+    document.getElementById("timelineText").value = "";
+  }
 }
 
 function addImageBlock() {
@@ -495,19 +902,11 @@ function addImageBlock() {
     return;
   }
 
-  const reader = new FileReader();
-  reader.onload = (e) => {
-    const block = {
-      type: "image",
-      imageData: e.target.result,
-      fileName: file.name,
-      id: Date.now(),
-    };
-    timelineBlocks.push(block);
+  loadImageForTablet(file, (dataUrl) => {
+    addBlock({ type: "image", imageData: dataUrl, fileName: file.name });
     fileInput.value = "";
-    renderTimeline();
-  };
-  reader.readAsDataURL(file);
+    fileInput.dispatchEvent(new Event("change"));
+  });
 }
 
 function addDelayBlock() {
@@ -517,9 +916,7 @@ function addDelayBlock() {
     return;
   }
 
-  const block = { type: "delay", seconds: seconds, id: Date.now() };
-  timelineBlocks.push(block);
-  renderTimeline();
+  addBlock({ type: "delay", seconds: seconds });
 }
 
 function addMotionBlock() {
@@ -531,19 +928,15 @@ function addMotionBlock() {
     return;
   }
 
-  const block = {
-    type: "motion",
-    motion: motionValue,
-    displayName: getMotionDisplayName(motionValue),
-    id: Date.now(),
-  };
-  timelineBlocks.push(block);
-  select.value = "";
-  renderTimeline();
+  if (addBlock({ type: "motion", motion: motionValue, displayName: getMotionDisplayName(motionValue) })) {
+    select.value = "";
+  }
 }
 
 function deleteBlock(id) {
+  if (isPlaying) return;
   timelineBlocks = timelineBlocks.filter((b) => b.id !== id);
+  resetBlockStates();
   renderTimeline();
 }
 
@@ -562,8 +955,9 @@ function renderTimeline() {
   timelineBlocks.forEach((block, index) => {
     const blockEl = document.createElement("div");
     blockEl.className = `timeline-block ${block.type}`;
-    blockEl.draggable = true;
+    blockEl.draggable = !isPlaying;
     blockEl.dataset.index = index;
+    blockEl.dataset.id = block.id;
 
     let content = "";
     if (block.type === "text") {
@@ -594,12 +988,14 @@ function renderTimeline() {
       `;
     }
 
-    blockEl.innerHTML = content + `
+    blockEl.innerHTML = `<div class="block-step">${index + 1}<span class="block-state-badge"></span></div>` + content + `
+      <div class="block-error"></div>
       <div class="block-actions">
-        <button class="delete-btn">Delete</button>
+        <button class="delete-btn"${isPlaying ? " disabled" : ""}>Delete</button>
       </div>
     `;
     blockEl.querySelector(".delete-btn").addEventListener("click", () => deleteBlock(block.id));
+    applyBlockState(blockEl, blockStates[block.id]);
 
     blockEl.addEventListener("dragstart", (e) => {
       e.dataTransfer.effectAllowed = "move";
@@ -615,11 +1011,13 @@ function renderTimeline() {
     });
     blockEl.addEventListener("drop", (e) => {
       e.preventDefault();
+      if (isPlaying) return;
       const fromIndex = parseInt(e.dataTransfer.getData("text/html"));
       const toIndex = parseInt(blockEl.dataset.index);
       if (fromIndex !== toIndex) {
         const movedBlock = timelineBlocks.splice(fromIndex, 1)[0];
         timelineBlocks.splice(toIndex, 0, movedBlock);
+        resetBlockStates();
         renderTimeline();
       }
     });
@@ -629,6 +1027,102 @@ function renderTimeline() {
 }
 
 // ─── Playback ────────────────────────────────────────────────────────────────
+
+const BLOCK_STATE_LABELS = {
+  playing: "Playing",
+  done: "Done",
+  error: "Failed",
+  stopped: "Stopped",
+};
+
+function applyBlockState(blockEl, info) {
+  blockEl.classList.remove("state-playing", "state-done", "state-error", "state-stopped");
+  const badge = blockEl.querySelector(".block-state-badge");
+  const errorEl = blockEl.querySelector(".block-error");
+  if (info) {
+    blockEl.classList.add("state-" + info.state);
+    badge.textContent = BLOCK_STATE_LABELS[info.state] || "";
+  } else {
+    badge.textContent = "";
+  }
+  errorEl.textContent = info && info.error ? info.error : "";
+  errorEl.title = errorEl.textContent;
+}
+
+function setBlockState(block, state, error) {
+  blockStates[block.id] = { state, error: error || "" };
+  const blockEl = document.querySelector(`.timeline-block[data-id="${block.id}"]`);
+  if (!blockEl) return;
+  applyBlockState(blockEl, blockStates[block.id]);
+  if (state === "playing") {
+    blockEl.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" });
+  }
+}
+
+function resetBlockStates() {
+  blockStates = {};
+  setTimelineStatus("idle", "Ready", 0);
+}
+
+function setTimelineStatus(state, text, progress) {
+  document.getElementById("timelineStatus").className = "timeline-status " + state;
+  document.getElementById("timelineStatusText").textContent = text;
+  document.getElementById("timelineProgressBar").style.width = Math.round(progress * 100) + "%";
+}
+
+function describeBlock(block) {
+  if (block.type === "speech") return `Speech "${block.text}"`;
+  if (block.type === "text") return `Text "${block.text}"`;
+  if (block.type === "image") return `Image ${block.fileName || ""}`.trim();
+  if (block.type === "delay") return `Wait ${block.seconds}s`;
+  if (block.type === "motion") return `Motion ${block.displayName || block.motion}`;
+  return block.type;
+}
+
+// Waits `ms` but returns early if playback is stopped
+function abortableSleep(ms) {
+  return new Promise((resolve) => {
+    const started = Date.now();
+    const tick = setInterval(() => {
+      if (playbackAborted || Date.now() - started >= ms) {
+        clearInterval(tick);
+        resolve();
+      }
+    }, 100);
+  });
+}
+
+async function postJson(url, body) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+async function runBlock(block) {
+  let r;
+  if (block.type === "text") {
+    const params = new URLSearchParams({
+      text: block.text,
+      fontSize: block.fontSize,
+      color: block.color,
+    });
+    r = await fetch("/send?" + params.toString());
+  } else if (block.type === "speech") {
+    r = await postJson("/speak", { text: block.text });
+  } else if (block.type === "image") {
+    r = await postJson("/send-image", { imageData: block.imageData });
+  } else if (block.type === "delay") {
+    await abortableSleep(block.seconds * 1000);
+    return;
+  } else if (block.type === "motion") {
+    r = await postJson("/motion", { motion: block.motion });
+  } else {
+    throw new Error(`Unknown block type "${block.type}"`);
+  }
+  if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
+}
 
 async function playTimeline() {
   if (timelineBlocks.length === 0) {
@@ -642,65 +1136,76 @@ async function playTimeline() {
 
   isPlaying = true;
   playbackAborted = false;
+  blockStates = {};
   document.getElementById("playTimeline").disabled = true;
+  document.getElementById("clearTimeline").disabled = true;
+  document.getElementById("importTimelineBtn").disabled = true;
+  renderTimeline();
 
-  for (let i = 0; i < timelineBlocks.length; i++) {
+  const blocks = timelineBlocks.slice();
+  const total = blocks.length;
+  let failed = null;
+  let completed = 0;
+
+  for (let i = 0; i < total; i++) {
     if (playbackAborted) break;
 
-    const block = timelineBlocks[i];
+    const block = blocks[i];
+    setBlockState(block, "playing");
+    setTimelineStatus("playing", `Playing ${i + 1} of ${total}: ${describeBlock(block)}`, i / total);
 
     try {
-      if (block.type === "text") {
-        const params = new URLSearchParams({
-          text: block.text,
-          fontSize: block.fontSize,
-          color: block.color,
-        });
-        const r = await fetch("/send?" + params.toString());
-        if (!r.ok) throw new Error(await r.text());
-      } else if (block.type === "speech") {
-        const r = await fetch("/speak", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: block.text }),
-        });
-        if (!r.ok) throw new Error(await r.text());
-      } else if (block.type === "image") {
-        const r = await fetch("/send-image", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ imageData: block.imageData }),
-        });
-        if (!r.ok) throw new Error(await r.text());
-      } else if (block.type === "delay") {
-        await new Promise((resolve) => setTimeout(resolve, block.seconds * 1000));
-      } else if (block.type === "motion") {
-        const r = await fetch("/motion", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ motion: block.motion }),
-        });
-        if (!r.ok) throw new Error(await r.text());
-      }
+      await runBlock(block);
     } catch (error) {
+      if (playbackAborted) break;
+      setBlockState(block, "error", error.message);
       logError(`Timeline block ${i + 1} (${block.type})`, error.message);
-      playbackAborted = true;
+      failed = { index: i, message: error.message };
       break;
     }
 
-    if (i < timelineBlocks.length - 1) {
-      await new Promise((resolve) => setTimeout(resolve, 300));
+    if (playbackAborted) {
+      setBlockState(block, "stopped");
+      break;
     }
+    setBlockState(block, "done");
+    completed = i + 1;
+
+    if (i < total - 1) {
+      await abortableSleep(300);
+    }
+  }
+
+  if (failed) {
+    setTimelineStatus("error", `Failed at block ${failed.index + 1} of ${total}: ${failed.message}`, completed / total);
+  } else if (playbackAborted) {
+    blocks.forEach((b) => {
+      if (blockStates[b.id] && blockStates[b.id].state === "playing") setBlockState(b, "stopped");
+    });
+    setTimelineStatus("stopped", `Stopped after ${completed} of ${total} blocks`, completed / total);
+  } else {
+    setTimelineStatus("done", `Finished — all ${total} blocks played`, 1);
   }
 
   isPlaying = false;
   document.getElementById("playTimeline").disabled = false;
+  document.getElementById("clearTimeline").disabled = false;
+  document.getElementById("importTimelineBtn").disabled = false;
+  renderTimeline();
 }
 
-function stopTimeline() {
+async function stopTimeline() {
+  if (!isPlaying) {
+    clearScreen();
+    return;
+  }
   playbackAborted = true;
-  isPlaying = false;
-  document.getElementById("playTimeline").disabled = false;
+  setTimelineStatus("stopping", "Stopping…", 0);
+  // Interrupt whatever the robot is doing so the in-flight block returns
+  await Promise.allSettled([
+    fetch("/stop-speech", { method: "POST" }),
+    fetch("/stop-motion", { method: "POST" }),
+  ]);
   clearScreen();
 }
 
@@ -715,6 +1220,7 @@ function clearTimelineBlocks() {
 
   if (confirm("Clear all blocks from the timeline?")) {
     timelineBlocks = [];
+    resetBlockStates();
     renderTimeline();
   }
 }
@@ -763,7 +1269,7 @@ function importTimeline(file) {
 
       const validTypes = ["speech", "text", "image", "delay", "motion"];
       const validBlocks = importData.blocks.filter((block) => {
-        return block && block.type && validTypes.includes(block.type) && block.id;
+        return block && block.type && validTypes.includes(block.type);
       });
 
       if (validBlocks.length === 0) {
@@ -777,7 +1283,13 @@ function importTimeline(file) {
         }
       }
 
-      timelineBlocks = validBlocks;
+      if (isPlaying) {
+        alert("Stop the timeline before importing.");
+        return;
+      }
+      // Re-issue ids so blocks from different files never collide
+      timelineBlocks = validBlocks.map((block) => ({ ...block, id: nextBlockId() }));
+      resetBlockStates();
       renderTimeline();
       alert(`Imported "${importData.name || "Untitled"}" — ${validBlocks.length} blocks loaded.`);
     } catch (error) {
@@ -841,7 +1353,7 @@ dropZone.addEventListener("drop", (e) => {
   if (e.dataTransfer.files.length > 0) handleImageFile(e.dataTransfer.files[0]);
 });
 document.getElementById("sendImage").addEventListener("click", sendImage);
-document.getElementById("clearImage").addEventListener("click", clearImage);
+document.getElementById("clearImage").addEventListener("click", clearScreen);
 
 // Timeline event listeners
 document.getElementById("addSpeechBlock").addEventListener("click", addSpeechBlock);
@@ -873,7 +1385,50 @@ document.getElementById("timelineImageInput").addEventListener("change", (e) => 
   }
 });
 
+// Drive event listeners
+document.getElementById("driveToggleBtn").addEventListener("click", (e) => {
+  setDriveEnabled(!driveEnabled);
+  e.currentTarget.blur(); // so Space can't re-toggle it
+});
+document.getElementById("avoidanceToggleBtn").addEventListener("click", (e) => {
+  toggleObstacleAvoidance();
+  e.currentTarget.blur(); // so Space can't toggle it
+});
+document.getElementById("driveSpeedSlider").addEventListener("input", (e) => {
+  document.getElementById("driveSpeedValue").textContent = e.target.value + "%";
+  if (driveEnabled && isMoving(driveCommand())) sendDrive();
+});
+document.querySelectorAll(".drive-key").forEach((btn) => {
+  const key = btn.dataset.key;
+  const release = () => {
+    if (driveHeld.delete(key)) {
+      updateDriveUi();
+      sendDrive();
+    }
+  };
+  btn.addEventListener("pointerdown", (e) => {
+    if (!driveEnabled) return;
+    e.preventDefault();
+    if (key === "stop") {
+      driveStop();
+      return;
+    }
+    btn.setPointerCapture(e.pointerId);
+    driveHeld.add(key);
+    updateDriveUi();
+    sendDrive();
+  });
+  btn.addEventListener("pointerup", release);
+  btn.addEventListener("pointercancel", release);
+  btn.addEventListener("lostpointercapture", release);
+});
+
 // Robot control event listeners
+document.getElementById("clearTabletBtn").addEventListener("click", clearScreen);
+document.getElementById("reloadMotionsBtn").addEventListener("click", loadMotionsFromRobot);
+Object.keys(SLIDERS).forEach((key) => {
+  document.getElementById(SLIDERS[key].slider).addEventListener("input", () => onSliderInput(key));
+});
 document.getElementById("wakeUpBtn").addEventListener("click", wakeUpRobot);
 document.getElementById("stopMotionBtn").addEventListener("click", stopMotion);
 document.getElementById("stopMotionBtn2").addEventListener("click", stopMotion);
