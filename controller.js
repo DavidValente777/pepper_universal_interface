@@ -1515,6 +1515,30 @@ async function runBlock(block) {
   if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
 }
 
+// Runs one block of the current step; never rejects, so a step can wait for all
+async function runStepBlock(block) {
+  setBlockState(block, "playing");
+  try {
+    await runBlock(block);
+  } catch (error) {
+    if (playbackAborted) {
+      setBlockState(block, "stopped");
+      return null;
+    }
+    setBlockState(block, "error", error.message);
+    return error;
+  }
+  setBlockState(block, playbackAborted ? "stopped" : "done");
+  return null;
+}
+
+function setPlayingStep(index) {
+  playingStepIndex = index;
+  document.querySelectorAll("#timeline .timeline-gap").forEach((gap) => {
+    gap.classList.toggle("active", !gap.classList.contains("edge") && Number(gap.dataset.gap) === index);
+  });
+}
+
 async function playTimeline() {
   if (timelineSteps.length === 0) {
     alert("Add some blocks to the timeline first.");
@@ -1533,33 +1557,28 @@ async function playTimeline() {
   document.getElementById("importTimelineBtn").disabled = true;
   renderTimeline();
 
-  const blocks = timelineSteps.flat();
-  const total = blocks.length;
+  const steps = timelineSteps.map((step) => step.slice());
+  const total = steps.length;
   let failed = null;
   let completed = 0;
 
   for (let i = 0; i < total; i++) {
     if (playbackAborted) break;
 
-    const block = blocks[i];
-    setBlockState(block, "playing");
-    setTimelineStatus("playing", `Playing ${i + 1} of ${total}: ${describeBlock(block)}`, i / total);
+    const step = steps[i];
+    setPlayingStep(i);
+    setTimelineStatus("playing", `Playing step ${i + 1} of ${total}: ${step.map(describeBlock).join(" + ")}`, i / total);
 
-    try {
-      await runBlock(block);
-    } catch (error) {
-      if (playbackAborted) break;
-      setBlockState(block, "error", error.message);
-      logError(`Timeline block ${i + 1} (${block.type})`, error.message);
-      failed = { index: i, message: error.message };
+    // Every block of the step starts now; the step ends when all have finished
+    const errors = await Promise.all(step.map(runStepBlock));
+    if (playbackAborted) break;
+
+    const failures = step.map((block, k) => [block, errors[k]]).filter(([, error]) => error);
+    if (failures.length > 0) {
+      failures.forEach(([block, error]) => logError(`Timeline step ${i + 1} (${block.type})`, error.message));
+      failed = { index: i, message: failures[0][1].message };
       break;
     }
-
-    if (playbackAborted) {
-      setBlockState(block, "stopped");
-      break;
-    }
-    setBlockState(block, "done");
     completed = i + 1;
 
     if (i < total - 1) {
@@ -1567,15 +1586,16 @@ async function playTimeline() {
     }
   }
 
+  setPlayingStep(-1);
   if (failed) {
-    setTimelineStatus("error", `Failed at block ${failed.index + 1} of ${total}: ${failed.message}`, completed / total);
+    setTimelineStatus("error", `Failed at step ${failed.index + 1} of ${total}: ${failed.message}`, completed / total);
   } else if (playbackAborted) {
-    blocks.forEach((b) => {
-      if (blockStates[b.id] && blockStates[b.id].state === "playing") setBlockState(b, "stopped");
+    steps.flat().forEach((block) => {
+      if (blockStates[block.id] && blockStates[block.id].state === "playing") setBlockState(block, "stopped");
     });
-    setTimelineStatus("stopped", `Stopped after ${completed} of ${total} blocks`, completed / total);
+    setTimelineStatus("stopped", `Stopped after ${completed} of ${total} steps`, completed / total);
   } else {
-    setTimelineStatus("done", `Finished — all ${total} blocks played`, 1);
+    setTimelineStatus("done", `Finished — all ${total} steps played`, 1);
   }
 
   isPlaying = false;

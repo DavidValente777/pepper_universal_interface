@@ -151,3 +151,104 @@ test("blocks cannot be dragged while the timeline plays", async () => {
     return during;`);
   assert.deepEqual(shape, [["speech"], ["motion"]]);
 });
+
+// Block state by id; null when the block never ran (undefined does not survive returnByValue)
+const stateOf = `(id) => (blockStates[id] || {}).state || null`;
+
+test("blocks in a step start together and the next step waits for the slowest", async () => {
+  const result = await page.evaluate(`
+    __bridge.calls = []; __bridge.delays = { "/speak": 400, "/motion": 150 };
+    const ids = __t.load(${JSON.stringify([[SPEECH, MOTION], [TEXT]])});
+    await playTimeline();
+    __bridge.delays = {};
+    const call = (p) => __bridge.calls.find((c) => c.path === p);
+    const speak = call("/speak"), motion = call("/motion"), send = call("/send");
+    return {
+      startGap: Math.abs(speak.start - motion.start),
+      textAfterSpeech: send.start - speak.end,
+      states: ids.flat().map(${stateOf}),
+      status: document.getElementById("timelineStatusText").textContent,
+    };`);
+  assert.ok(result.startGap < 50, `speech and motion should start together (gap ${result.startGap} ms)`);
+  assert.ok(result.textAfterSpeech >= 250, `step 2 started ${result.textAfterSpeech} ms after the slower block ended`);
+  assert.deepEqual(result.states, ["done", "done", "done"]);
+  assert.equal(result.status, "Finished — all 2 steps played");
+});
+
+test("the status line describes the step and the arrow into it is highlighted", async () => {
+  const seen = await page.evaluate(`
+    __bridge.delays = { "/speak": 300 };
+    __t.load(${JSON.stringify([[TEXT], [SPEECH, MOTION]])});
+    const playing = playTimeline();
+    await new Promise((r) => setTimeout(r, 450));
+    const seen = {
+      status: document.getElementById("timelineStatusText").textContent,
+      activeGaps: [...document.querySelectorAll(".timeline-gap.active")].map((g) => g.dataset.gap),
+      playingBadges: document.querySelectorAll(".timeline-block.state-playing").length,
+    };
+    await playing;
+    __bridge.delays = {};
+    seen.activeAfter = document.querySelectorAll(".timeline-gap.active").length;
+    return seen;`);
+  assert.equal(seen.status, 'Playing step 2 of 2: Speech "Hello" + Motion Hey');
+  assert.deepEqual(seen.activeGaps, ["1"]);
+  assert.equal(seen.playingBadges, 1, "motion finished, speech still playing");
+  assert.equal(seen.activeAfter, 0);
+});
+
+test("a failed block lets its step finish, then stops before the next step", async () => {
+  const result = await page.evaluate(`
+    __bridge.calls = []; __bridge.delays = { "/speak": 200 }; __bridge.failures = { "/motion": "motion broke" };
+    const ids = __t.load(${JSON.stringify([[SPEECH, MOTION], [TEXT]])});
+    await playTimeline();
+    __bridge.delays = {}; __bridge.failures = {};
+    return {
+      states: ids.flat().map(${stateOf}),
+      sendCalled: __bridge.calls.some((c) => c.path === "/send"),
+      status: document.getElementById("timelineStatusText").textContent,
+      log: document.getElementById("errorLogEntries").textContent,
+    };`);
+  assert.deepEqual(result.states, ["done", "error", null]);
+  assert.equal(result.sendCalled, false);
+  assert.equal(result.status, "Failed at step 1 of 2: motion broke");
+  assert.match(result.log, /Timeline step 1 \(motion\)/);
+});
+
+test("losing the network mid-step fails the block and ends playback cleanly", async () => {
+  const result = await page.evaluate(`
+    __bridge.offline = true;
+    const ids = __t.load(${JSON.stringify([[SPEECH], [TEXT]])});
+    await playTimeline();
+    __bridge.offline = false;
+    const block = document.querySelector('.timeline-block[data-id="' + ids[0][0] + '"]');
+    return {
+      state: blockStates[ids[0][0]].state,
+      error: block.querySelector(".block-error").textContent,
+      isPlaying,
+      playDisabled: document.getElementById("playTimeline").disabled,
+    };`);
+  assert.equal(result.state, "error");
+  assert.equal(result.error, "Failed to fetch");
+  assert.equal(result.isPlaying, false);
+  assert.equal(result.playDisabled, false);
+});
+
+test("Stop ends a step with a long wait and speech promptly", async () => {
+  const result = await page.evaluate(`
+    __bridge.delays = { "/speak": 10000 };
+    const ids = __t.load(${JSON.stringify([[SPEECH, { type: "delay", seconds: 10 }], [TEXT]])});
+    const playing = playTimeline();
+    await new Promise((r) => setTimeout(r, 200));
+    const started = performance.now();
+    await stopTimeline();
+    await playing;
+    __bridge.delays = {};
+    return {
+      took: performance.now() - started,
+      states: ids.flat().map(${stateOf}),
+      status: document.getElementById("timelineStatusText").textContent,
+    };`);
+  assert.ok(result.took < 1000, `stop took ${result.took} ms`);
+  assert.deepEqual(result.states, ["stopped", "stopped", null]);
+  assert.equal(result.status, "Stopped after 0 of 2 steps");
+});
