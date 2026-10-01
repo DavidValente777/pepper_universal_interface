@@ -38,7 +38,8 @@ function clearErrorLog() {
 let currentFontSize = 110;
 let currentColor = "#000000";
 let currentImageData = null;
-let timelineBlocks = [];
+let timelineSteps = []; // [[block, ...], ...]: the blocks of a step start together
+let playingStepIndex = -1; // step being played, -1 when idle
 let isPlaying = false;
 let playbackAborted = false;
 let blockStates = {}; // block id -> { state: "playing"|"done"|"error"|"stopped", error }
@@ -1177,7 +1178,7 @@ function addBlock(block) {
     return false;
   }
   block.id = nextBlockId();
-  timelineBlocks.push(block);
+  timelineSteps = appendStep(timelineSteps, block);
   resetBlockStates();
   renderTimeline();
   return true;
@@ -1248,95 +1249,91 @@ function addMotionBlock() {
 
 function deleteBlock(id) {
   if (isPlaying) return;
-  timelineBlocks = timelineBlocks.filter((b) => b.id !== id);
+  timelineSteps = withoutBlock(timelineSteps, id);
   resetBlockStates();
   renderTimeline();
 }
 
+const ARROW_SVG =
+  '<svg viewBox="0 0 28 14" aria-hidden="true"><path d="M1 7h21" stroke="currentColor" stroke-width="2" fill="none"/>' +
+  '<path d="M19 2l8 5-8 5z" fill="currentColor"/></svg>';
+
+function blockContentHtml(block) {
+  if (block.type === "text") {
+    return `
+      <div class="block-header"><span>Text</span></div>
+      <div class="block-content" style="color: ${escapeHtml(block.color)};">${escapeHtml(block.text)}</div>`;
+  }
+  if (block.type === "speech") {
+    return `
+      <div class="block-header"><span>Speech</span></div>
+      <div class="block-content">"${escapeHtml(block.text)}"</div>`;
+  }
+  if (block.type === "image") {
+    return `
+      <div class="block-header"><span>Image</span></div>
+      <img src="${escapeHtml(block.imageData)}" class="block-thumbnail" />
+      <div class="block-content">${escapeHtml(block.fileName)}</div>`;
+  }
+  if (block.type === "delay") {
+    return `
+      <div class="block-header"><span>Wait</span></div>
+      <div class="block-content">${block.seconds} second${block.seconds === 1 ? "" : "s"}</div>`;
+  }
+  if (block.type === "motion") {
+    return `
+      <div class="block-header"><span>Motion</span></div>
+      <div class="block-content">${escapeHtml(block.displayName)}</div>`;
+  }
+  return "";
+}
+
+function createBlockElement(block) {
+  const blockEl = document.createElement("div");
+  blockEl.className = `timeline-block ${block.type}`;
+  blockEl.draggable = !isPlaying;
+  blockEl.dataset.id = block.id;
+  blockEl.innerHTML = `<div class="block-step"><span class="block-state-badge"></span></div>` + blockContentHtml(block) + `
+    <div class="block-error"></div>
+    <div class="block-actions">
+      <button class="delete-btn"${isPlaying ? " disabled" : ""}>Delete</button>
+    </div>`;
+  blockEl.querySelector(".delete-btn").addEventListener("click", () => deleteBlock(block.id));
+  applyBlockState(blockEl, blockStates[block.id]);
+  return blockEl;
+}
+
+function createStepElement(step, index) {
+  const stepEl = document.createElement("div");
+  stepEl.className = "timeline-step" + (step.length > 1 ? " multi" : "");
+  stepEl.dataset.step = index;
+  const together = step.length > 1 ? '<span class="step-together"> · runs together</span>' : "";
+  stepEl.innerHTML = `<div class="step-header">Step ${index + 1}${together}</div><div class="step-blocks"></div>`;
+  const blocksEl = stepEl.querySelector(".step-blocks");
+  step.forEach((block) => blocksEl.appendChild(createBlockElement(block)));
+  return stepEl;
+}
+
+// Gap `index` sits before step `index`; the ones between steps carry the arrow
+function createGapElement(index) {
+  const gapEl = document.createElement("div");
+  const between = index > 0 && index < timelineSteps.length;
+  gapEl.className = "timeline-gap" + (between ? "" : " edge") + (between && index === playingStepIndex ? " active" : "");
+  gapEl.dataset.gap = index;
+  if (between) gapEl.innerHTML = ARROW_SVG;
+  return gapEl;
+}
+
 function renderTimeline() {
   const timeline = document.getElementById("timeline");
-
-  if (timelineBlocks.length === 0) {
-    timeline.classList.add("empty");
-    timeline.innerHTML = "";
-    return;
-  }
-
-  timeline.classList.remove("empty");
   timeline.innerHTML = "";
-
-  timelineBlocks.forEach((block, index) => {
-    const blockEl = document.createElement("div");
-    blockEl.className = `timeline-block ${block.type}`;
-    blockEl.draggable = !isPlaying;
-    blockEl.dataset.index = index;
-    blockEl.dataset.id = block.id;
-
-    let content = "";
-    if (block.type === "text") {
-      content = `
-        <div class="block-header"><span>Text</span></div>
-        <div class="block-content" style="color: ${escapeHtml(block.color)};">${escapeHtml(block.text)}</div>
-      `;
-    } else if (block.type === "speech") {
-      content = `
-        <div class="block-header"><span>Speech</span></div>
-        <div class="block-content">"${escapeHtml(block.text)}"</div>
-      `;
-    } else if (block.type === "image") {
-      content = `
-        <div class="block-header"><span>Image</span></div>
-        <img src="${escapeHtml(block.imageData)}" class="block-thumbnail" />
-        <div class="block-content">${escapeHtml(block.fileName)}</div>
-      `;
-    } else if (block.type === "delay") {
-      content = `
-        <div class="block-header"><span>Wait</span></div>
-        <div class="block-content">${block.seconds} second${block.seconds === 1 ? "" : "s"}</div>
-      `;
-    } else if (block.type === "motion") {
-      content = `
-        <div class="block-header"><span>Motion</span></div>
-        <div class="block-content">${escapeHtml(block.displayName)}</div>
-      `;
-    }
-
-    blockEl.innerHTML = `<div class="block-step">${index + 1}<span class="block-state-badge"></span></div>` + content + `
-      <div class="block-error"></div>
-      <div class="block-actions">
-        <button class="delete-btn"${isPlaying ? " disabled" : ""}>Delete</button>
-      </div>
-    `;
-    blockEl.querySelector(".delete-btn").addEventListener("click", () => deleteBlock(block.id));
-    applyBlockState(blockEl, blockStates[block.id]);
-
-    blockEl.addEventListener("dragstart", (e) => {
-      e.dataTransfer.effectAllowed = "move";
-      e.dataTransfer.setData("text/html", index);
-      blockEl.classList.add("dragging");
-    });
-    blockEl.addEventListener("dragend", () => {
-      blockEl.classList.remove("dragging");
-    });
-    blockEl.addEventListener("dragover", (e) => {
-      e.preventDefault();
-      e.dataTransfer.dropEffect = "move";
-    });
-    blockEl.addEventListener("drop", (e) => {
-      e.preventDefault();
-      if (isPlaying) return;
-      const fromIndex = parseInt(e.dataTransfer.getData("text/html"));
-      const toIndex = parseInt(blockEl.dataset.index);
-      if (fromIndex !== toIndex) {
-        const movedBlock = timelineBlocks.splice(fromIndex, 1)[0];
-        timelineBlocks.splice(toIndex, 0, movedBlock);
-        resetBlockStates();
-        renderTimeline();
-      }
-    });
-
-    timeline.appendChild(blockEl);
+  timeline.classList.toggle("empty", timelineSteps.length === 0);
+  if (timelineSteps.length === 0) return;
+  timelineSteps.forEach((step, index) => {
+    timeline.appendChild(createGapElement(index));
+    timeline.appendChild(createStepElement(step, index));
   });
+  timeline.appendChild(createGapElement(timelineSteps.length));
 }
 
 // ─── Playback ────────────────────────────────────────────────────────────────
@@ -1438,7 +1435,7 @@ async function runBlock(block) {
 }
 
 async function playTimeline() {
-  if (timelineBlocks.length === 0) {
+  if (timelineSteps.length === 0) {
     alert("Add some blocks to the timeline first.");
     return;
   }
@@ -1455,7 +1452,7 @@ async function playTimeline() {
   document.getElementById("importTimelineBtn").disabled = true;
   renderTimeline();
 
-  const blocks = timelineBlocks.slice();
+  const blocks = timelineSteps.flat();
   const total = blocks.length;
   let failed = null;
   let completed = 0;
@@ -1529,17 +1526,17 @@ function clearTimelineBlocks() {
     alert("Cannot clear timeline while playing!");
     return;
   }
-  if (timelineBlocks.length === 0) return;
+  if (timelineSteps.length === 0) return;
 
   if (confirm("Clear all blocks from the timeline?")) {
-    timelineBlocks = [];
+    timelineSteps = [];
     resetBlockStates();
     renderTimeline();
   }
 }
 
 function exportTimeline() {
-  if (timelineBlocks.length === 0) {
+  if (timelineSteps.length === 0) {
     alert("Add some blocks to the timeline before exporting.");
     return;
   }
@@ -1551,7 +1548,7 @@ function exportTimeline() {
   const exportData = {
     name: name,
     exportedAt: new Date().toISOString(),
-    blocks: timelineBlocks,
+    blocks: timelineSteps.flat(),
   };
 
   const jsonString = JSON.stringify(exportData, null, 2);
@@ -1590,8 +1587,8 @@ function importTimeline(file) {
         return;
       }
 
-      if (timelineBlocks.length > 0) {
-        if (!confirm(`Replace the current timeline (${timelineBlocks.length} blocks)?`)) {
+      if (timelineSteps.length > 0) {
+        if (!confirm(`Replace the current timeline (${timelineSteps.length} steps)?`)) {
           return;
         }
       }
@@ -1601,7 +1598,7 @@ function importTimeline(file) {
         return;
       }
       // Re-issue ids so blocks from different files never collide
-      timelineBlocks = validBlocks.map((block) => ({ ...block, id: nextBlockId() }));
+      timelineSteps = validBlocks.map((block) => [{ ...block, id: nextBlockId() }]);
       resetBlockStates();
       renderTimeline();
       alert(`Imported "${importData.name || "Untitled"}" — ${validBlocks.length} blocks loaded.`);

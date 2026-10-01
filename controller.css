@@ -739,7 +739,7 @@ button:hover {
   border-radius: 8px;
   padding: 15px;
   display: flex;
-  gap: 10px;
+  gap: 0;
   overflow-x: auto;
   align-items: flex-start;
 }
@@ -777,6 +777,59 @@ button:hover {
 .timeline-block.image  { border-left-color: #c026d3; } /* fuchsia */
 .timeline-block.delay  { border-left-color: #64748b; } /* slate  */
 .timeline-block.motion { border-left-color: #7c3aed; } /* violet */
+
+/* Steps: blocks stacked in a column start together; gaps hold the arrows */
+.timeline-step {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  padding: 8px;
+  border: 2px solid transparent;
+  border-radius: 10px;
+  transition: border-color 0.15s, background 0.15s;
+}
+.timeline-step.multi {
+  background: rgba(37, 99, 235, 0.06);
+}
+.step-header {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: #9ca3af;
+}
+.step-together {
+  font-weight: 600;
+  text-transform: none;
+  color: var(--primary);
+}
+.step-blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.timeline-gap {
+  position: relative;
+  flex-shrink: 0;
+  width: 44px;
+  align-self: stretch;
+  display: flex;
+  justify-content: center;
+  padding-top: 62px; /* level with the first block of each step */
+  color: #9ca3af;
+}
+.timeline-gap.edge {
+  width: 16px;
+}
+.timeline-gap svg {
+  width: 28px;
+  height: 14px;
+}
+.timeline-gap.active {
+  color: var(--primary);
+}
 
 .block-header {
   font-weight: bold;
