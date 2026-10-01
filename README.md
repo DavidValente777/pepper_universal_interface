@@ -96,7 +96,7 @@ The connection is polled every 5 seconds. If it drops, the server will attempt t
 | **Text Display** | Show text on Pepper's tablet with adjustable font size and colour |
 | **Image Display** | Drag & drop or select a JPG/PNG; it is shown as large as possible on the tablet (1280×800) without distorting its aspect ratio |
 | **Motions** | Play any animation installed on the robot — the list is loaded from the robot on connect (standard animations plus animations shipped with installed apps; system apps such as shutdown/reboot are excluded) |
-| **Sequence Builder** | Build a timeline of speech, text, image, motion, and delay steps; reorder by drag & drop; export/import as JSON. During playback the current block is highlighted, finished/failed/stopped blocks are marked, and errors are shown on the failing block |
+| **Sequence Builder** | Build a sequence of steps from speech, text, image, motion and delay blocks. Stack blocks in one step to run them at the same time (one per kind: speech, motion, tablet text/image, wait); the next step starts when all of them have finished. Drag a block onto a step to join it or into the gap between steps to make a new step. Arrows show the order. Export/import as JSON (older single-row exports still import). During playback the current step is highlighted, finished/failed/stopped blocks are marked, and errors are shown on the failing block |
 | **Error Log** | All runtime errors are logged in-page with a count indicator in the header bar |
 
 ---
