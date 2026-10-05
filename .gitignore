@@ -11,6 +11,7 @@ temp_pepper_image_*
 # IDE
 .vscode/
 .idea/
+.claude/
 
 # OS
 .DS_Store
