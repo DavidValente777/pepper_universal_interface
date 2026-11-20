@@ -1733,6 +1733,38 @@ function importTimeline(file) {
   reader.readAsText(file);
 }
 
+// ─── Tabs ────────────────────────────────────────────────────────────────────
+
+const TAB_STORAGE_KEY = "pepper.activeTab";
+const TABS = { controller: "controllerTab", story: "storyTab" };
+
+function showTab(name) {
+  if (!TABS[name]) name = "controller";
+  Object.entries(TABS).forEach(([tab, id]) => (document.getElementById(id).hidden = tab !== name));
+  document.querySelectorAll(".tab-bar .tab").forEach((button) => {
+    const active = button.dataset.tab === name;
+    button.classList.toggle("active", active);
+    button.setAttribute("aria-selected", String(active));
+  });
+  try {
+    localStorage.setItem(TAB_STORAGE_KEY, name);
+  } catch {
+    // Remembering the tab is only a convenience
+  }
+}
+
+function storedTab() {
+  try {
+    return localStorage.getItem(TAB_STORAGE_KEY) || "controller";
+  } catch {
+    return "controller";
+  }
+}
+
+document.querySelectorAll(".tab-bar .tab").forEach((button) =>
+  button.addEventListener("click", () => showTab(button.dataset.tab)));
+showTab(storedTab());
+
 // ─── Event Listeners ─────────────────────────────────────────────────────────
 
 document.getElementById("connectBtn").addEventListener("click", toggleConnection);

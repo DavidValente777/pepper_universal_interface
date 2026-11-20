@@ -9,6 +9,10 @@
   <body>
     <header class="app-bar">
       Pepper Controller
+      <nav class="tab-bar" role="tablist">
+        <button class="tab active" data-tab="controller" role="tab" aria-selected="true">Controller</button>
+        <button class="tab" data-tab="story" role="tab" aria-selected="false">Story</button>
+      </nav>
       <span id="batteryIndicator" class="battery-indicator unknown" title="Pepper's battery">🔋 –</span>
       <button id="errorIndicator" class="error-indicator" style="display: none">
         <span id="errorCount">0</span> error<span id="errorPlural">s</span>
@@ -16,6 +20,7 @@
     </header>
 
     <div class="page-content">
+      <section id="controllerTab">
       <!-- Connectivity -->
       <p class="section-label">Connectivity</p>
       <div class="connection-panel">
@@ -289,6 +294,11 @@
 
         <div id="timeline" class="empty"></div>
       </div>
+
+      </section>
+
+      <!-- Story (filled by story-page.js) -->
+      <section id="storyTab" hidden></section>
 
       <!-- Error Log -->
       <p class="section-label">Error Log</p>
