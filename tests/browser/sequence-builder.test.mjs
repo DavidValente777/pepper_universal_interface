@@ -346,3 +346,19 @@ test("the gap after the last step grows to take the free width", async () => {
   assert.ok(widths[0] <= 20, `first edge ${widths[0]}`);
   assert.ok(widths[1] > 100, `last edge ${widths[1]}`);
 });
+
+test("the Sequence Builder motion list shows motion names, not just stars", async () => {
+  const widths = await page.evaluate(`
+    setMotionPickerOpen(timelineMotionPicker, true);
+    timelineMotionPicker.openCategory = motionCatalog[0].category;
+    renderMotionPicker(timelineMotionPicker);
+    const item = document.querySelector("#timelineMotionSelect .motion-picker-item");
+    const result = {
+      star: item.querySelector(".motion-picker-star").getBoundingClientRect().width,
+      name: item.querySelector(".motion-picker-choose").getBoundingClientRect().width,
+    };
+    setMotionPickerOpen(timelineMotionPicker, false);
+    return result;`);
+  assert.ok(widths.star < 50, `star is ${widths.star}px wide`);
+  assert.ok(widths.name > 100, `motion name is ${widths.name}px wide`);
+});

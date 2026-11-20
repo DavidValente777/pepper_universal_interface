@@ -154,11 +154,40 @@ function setSlidersEnabled(enabled) {
 
 // ─── Eye colour ──────────────────────────────────────────────────────────────
 
+const EYE_COLORS = [
+  ["White", "#ffffff"],
+  ["Red", "#ff0000"],
+  ["Orange", "#ff8000"],
+  ["Yellow", "#ffff00"],
+  ["Green", "#00ff00"],
+  ["Cyan", "#00ffff"],
+  ["Blue", "#0000ff"],
+  ["Purple", "#8000ff"],
+  ["Pink", "#ff00ff"],
+  ["Off", "#000000"],
+];
 const eyeColorListeners = []; // (color) => void, e.g. the Story page remembering it
+
+document.querySelectorAll(".eye-color-picker").forEach((picker) => {
+  EYE_COLORS.forEach(([name, value]) => picker.add(new Option(name, value)));
+});
+
+// Selects `color` in a picker; a colour that isn't in the list (e.g. from an
+// older story file) is shown as an extra "Custom" option
+function showEyeColor(picker, color) {
+  picker.querySelectorAll("option.custom").forEach((option) => option.remove());
+  const value = color.toLowerCase();
+  if (!EYE_COLORS.some(([, known]) => known === value)) {
+    const option = new Option(`Custom (${value})`, value);
+    option.className = "custom";
+    picker.add(option);
+  }
+  picker.value = value;
+}
 
 // Shows `color` in every eye colour picker and, unless send is false, on Pepper
 async function setEyeColor(color, { send = true } = {}) {
-  document.querySelectorAll(".eye-color-picker").forEach((picker) => (picker.value = color));
+  document.querySelectorAll(".eye-color-picker").forEach((picker) => showEyeColor(picker, color));
   eyeColorListeners.forEach((listener) => listener(color));
   if (!send) return;
   try {

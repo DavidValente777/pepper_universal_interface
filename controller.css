@@ -944,7 +944,9 @@ button:hover {
   font-weight: 700;
   color: #374151;
 }
-.add-block-card button {
+/* Only the card's own "Add to Timeline" button: buttons inside the motion
+   picker (stars, motion names) must keep their own sizes */
+.add-block-card > button {
   width: 100%;
   margin-top: auto;
 }
@@ -1453,17 +1455,17 @@ kbd {
   margin: 0;
 }
 
-.eye-color-group input[type="color"] {
-  width: 56px;
-  height: 32px;
-  padding: 0;
-  border: 1px solid #ccc;
+.eye-color-picker {
+  font-size: 15px;
+  padding: 6px 10px;
+  min-width: 130px;
+  border: 1px solid var(--input-border);
   border-radius: 6px;
+  background: white;
   cursor: pointer;
-  background: none;
 }
 
-.eye-color-group input[type="color"]:disabled {
+.eye-color-picker:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

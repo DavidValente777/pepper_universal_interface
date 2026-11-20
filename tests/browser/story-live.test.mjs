@@ -171,12 +171,12 @@ test("eye colour syncs both pickers, the robot and the story", async () => {
   await fresh([]);
   const result = await page.evaluate(`
     const picker = document.getElementById("storyEyeColorPicker");
-    picker.value = "#123456";
+    picker.value = "#0000ff";
     picker.dispatchEvent(new Event("change"));
     await new Promise((r) => setTimeout(r, 100));
     return { twin: document.getElementById("eyeColorPicker").value, bodies: ${BODIES("/eyes")},
       story: story.eyeColor };`);
-  assert.deepEqual(result, { twin: "#123456", bodies: [{ color: "#123456" }], story: "#123456" });
+  assert.deepEqual(result, { twin: "#0000ff", bodies: [{ color: "#0000ff" }], story: "#0000ff" });
 });
 
 test("the story's eye colour is applied to Pepper on connect", async () => {

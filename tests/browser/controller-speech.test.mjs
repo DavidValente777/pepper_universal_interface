@@ -69,3 +69,27 @@ test("eye colour picker sends /eyes", async () => {
     return lastBody("/eyes");`);
   assert.deepEqual(body, { color: "#00ff00" });
 });
+
+test("eye colour is a dropdown of named colours on both tabs", async () => {
+  const result = await page.evaluate(`
+    return ["eyeColorPicker", "storyEyeColorPicker"].map((id) => {
+      const el = document.getElementById(id);
+      return { tag: el.tagName, options: [...el.options].map((o) => o.textContent + " " + o.value) };
+    });`);
+  const expected = ["White #ffffff", "Red #ff0000", "Orange #ff8000", "Yellow #ffff00", "Green #00ff00",
+    "Cyan #00ffff", "Blue #0000ff", "Purple #8000ff", "Pink #ff00ff", "Off #000000"];
+  for (const picker of result) {
+    assert.equal(picker.tag, "SELECT");
+    assert.deepEqual(picker.options, expected);
+  }
+});
+
+test("an eye colour not in the list is still shown as Custom", async () => {
+  const shown = await page.evaluate(`
+    await setEyeColor("#123456", { send: false });
+    const el = document.getElementById("eyeColorPicker");
+    const result = { value: el.value, text: el.options[el.selectedIndex].textContent };
+    await setEyeColor("#ffffff", { send: false });
+    return result;`);
+  assert.deepEqual(shown, { value: "#123456", text: "Custom (#123456)" });
+});
