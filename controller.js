@@ -138,6 +138,25 @@ function setSlidersEnabled(enabled) {
     document.getElementById(cfg.slider).disabled = !enabled;
     if (!enabled) document.getElementById(cfg.label).textContent = "–";
   });
+  document.querySelectorAll(".eye-color-picker").forEach((picker) => (picker.disabled = !enabled));
+}
+
+// ─── Eye colour ──────────────────────────────────────────────────────────────
+
+const eyeColorListeners = []; // (color) => void, e.g. the Story page remembering it
+
+// Shows `color` in every eye colour picker and, unless send is false, on Pepper
+async function setEyeColor(color, { send = true } = {}) {
+  document.querySelectorAll(".eye-color-picker").forEach((picker) => (picker.value = color));
+  eyeColorListeners.forEach((listener) => listener(color));
+  if (!send) return;
+  try {
+    const r = await postJson("/eyes", { color });
+    const result = await r.json();
+    if (!result.success) logError("Eye colour", result.error || "Unknown error");
+  } catch (error) {
+    logError("Eye colour", error.message);
+  }
 }
 
 async function loadRobotSettings() {
@@ -243,12 +262,15 @@ function updateBattery(level, charging) {
   el.title = known ? `Pepper's battery: ${level}%${charging ? ", charging" : ""}` : "Pepper's battery (not connected)";
 }
 
+const connectionListeners = []; // (connected) => void, called when the robot connects or disconnects
+
 function markDisconnected() {
   updateBattery(null);
   if (!isConnected) return;
   isConnected = false;
   setSlidersEnabled(false);
   setDriveEnabled(false);
+  connectionListeners.forEach((listener) => listener(false));
 }
 
 function markConnected(hostIp, pepperIp, message) {
@@ -260,7 +282,10 @@ function markConnected(hostIp, pepperIp, message) {
   setConnectButton(true);
   const wasConnected = isConnected;
   isConnected = true;
-  if (!wasConnected) onConnected();
+  if (!wasConnected) {
+    onConnected();
+    connectionListeners.forEach((listener) => listener(true));
+  }
 }
 
 // Used when the bridge itself was restarted and no longer knows the robot
@@ -436,7 +461,11 @@ async function speak() {
     const response = await fetch("/speak", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text: text }),
+      body: JSON.stringify({
+        text: text,
+        animated: document.getElementById("speechAnimated").checked,
+        interrupt: true, // a new line cuts off whatever Pepper is saying
+      }),
     });
     if (!response.ok) logError("Speech", await response.text());
   } catch (error) {
@@ -933,6 +962,7 @@ const BUILTIN_MOTIONS = [
 
 const FAVOURITES_STORAGE_KEY = "pepperFavouriteMotions";
 let motionCatalog = BUILTIN_MOTIONS; // [{ category, label, path }]
+let motionsFromRobot = false; // motionCatalog was loaded from the robot (not the built-in list)
 let favouriteMotions = loadFavouriteMotions(); // Set of paths
 const motionPickers = [];
 
@@ -990,8 +1020,9 @@ function motionSearchResults(picker) {
   return [...motionCatalog, ...extraFavourites].filter((entry) => motionMatchesSearch(entry, words));
 }
 
-function createMotionPicker(root) {
-  const picker = { root, value: "", openCategory: null, query: "" };
+// onChange(path), if given, is called when the user chooses a motion
+function createMotionPicker(root, onChange) {
+  const picker = { root, value: "", openCategory: null, query: "", onChange };
   // The search box sits outside the list so re-rendering the list keeps its focus
   root.innerHTML = `
     <button type="button" class="motion-picker-trigger" aria-haspopup="listbox" aria-expanded="false">
@@ -1021,6 +1052,7 @@ function createMotionPicker(root) {
     const [first] = motionSearchResults(picker);
     if (!first) return;
     setMotionPickerValue(picker, first.path);
+    picker.onChange?.(first.path);
     setMotionPickerOpen(picker, false);
     picker.trigger.focus();
   });
@@ -1035,6 +1067,7 @@ function createMotionPicker(root) {
       renderMotionPicker(picker);
     } else if (action === "choose") {
       setMotionPickerValue(picker, path);
+      picker.onChange?.(path);
       setMotionPickerOpen(picker, false);
       picker.trigger.focus();
     }
@@ -1042,6 +1075,12 @@ function createMotionPicker(root) {
   motionPickers.push(picker);
   renderMotionPicker(picker);
   return picker;
+}
+
+// For pickers whose element is removed from the page (e.g. a deleted Story item)
+function destroyMotionPicker(picker) {
+  const index = motionPickers.indexOf(picker);
+  if (index >= 0) motionPickers.splice(index, 1);
 }
 
 function setMotionPickerValue(picker, path) {
@@ -1152,6 +1191,7 @@ async function loadMotionsFromRobot() {
     const data = await r.json();
     if (!data.success) throw new Error(data.error || "Unknown error");
     motionCatalog = buildMotionCatalog(data.animations, data.behaviors);
+    motionsFromRobot = true;
     motionPickers.forEach(renderMotionPicker);
     status.textContent = `${data.animations.length + data.behaviors.length} motions from the robot`;
     status.title = `${data.animations.length} standard animations + ${data.behaviors.length} animations from installed apps`;
@@ -1192,8 +1232,10 @@ function addSpeechBlock() {
     return;
   }
 
-  if (addBlock({ type: "speech", text: text })) {
+  const animatedBox = document.getElementById("timelineSpeechAnimated");
+  if (addBlock({ type: "speech", text: text, animated: animatedBox.checked })) {
     document.getElementById("timelineSpeech").value = "";
+    animatedBox.checked = false;
   }
 }
 
@@ -1267,7 +1309,7 @@ function blockContentHtml(block) {
   }
   if (block.type === "speech") {
     return `
-      <div class="block-header"><span>Speech</span></div>
+      <div class="block-header"><span>${block.animated ? "Animated speech" : "Speech"}</span></div>
       <div class="block-content">"${escapeHtml(block.text)}"</div>`;
   }
   if (block.type === "image") {
@@ -1462,7 +1504,7 @@ function setTimelineStatus(state, text, progress) {
 }
 
 function describeBlock(block) {
-  if (block.type === "speech") return `Speech "${block.text}"`;
+  if (block.type === "speech") return `${block.animated ? "Animated speech" : "Speech"} "${block.text}"`;
   if (block.type === "text") return `Text "${block.text}"`;
   if (block.type === "image") return `Image ${block.fileName || ""}`.trim();
   if (block.type === "delay") return `Wait ${block.seconds}s`;
@@ -1501,7 +1543,7 @@ async function runBlock(block) {
     });
     r = await fetch("/send?" + params.toString());
   } else if (block.type === "speech") {
-    r = await postJson("/speak", { text: block.text });
+    r = await postJson("/speak", { text: block.text, animated: block.animated === true });
   } else if (block.type === "image") {
     r = await postJson("/send-image", { imageData: block.imageData });
   } else if (block.type === "delay") {
@@ -1823,6 +1865,7 @@ document.getElementById("cameraToggleBtn").addEventListener("click", (e) => {
 
 // Robot control event listeners
 document.getElementById("clearTabletBtn").addEventListener("click", clearScreen);
+document.getElementById("eyeColorPicker").addEventListener("change", (e) => setEyeColor(e.target.value));
 document.getElementById("reloadMotionsBtn").addEventListener("click", loadMotionsFromRobot);
 Object.keys(SLIDERS).forEach((key) => {
   document.getElementById(SLIDERS[key].slider).addEventListener("input", () => onSliderInput(key));

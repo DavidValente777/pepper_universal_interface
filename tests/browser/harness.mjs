@@ -16,14 +16,22 @@ const TYPES = { ".html": "text/html", ".js": "text/javascript", ".css": "text/cs
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const FAKE_BRIDGE = `
-  window.__bridge = { delays: {}, failures: {}, offline: false, calls: [], dialogs: [], pending: new Set() };
+  (() => {
+    // Tests that reload the page seed the fake bridge through localStorage
+    const seeded = (key, fallback) => {
+      try { return JSON.parse(localStorage.getItem(key)) ?? fallback; } catch { return fallback; }
+    };
+    window.__bridge = { delays: {}, failures: seeded("__fakeFailures", {}), offline: false, calls: [], dialogs: [],
+      pending: new Set(), story: seeded("__fakeStory", null), connected: false };
+  })();
   window.alert = (message) => window.__bridge.dialogs.push(String(message));
   window.confirm = () => true;
   window.prompt = (message, value) => value;
   window.fetch = async (url, options = {}) => {
     const b = window.__bridge;
     const path = String(url).split("?")[0];
-    const call = { path, body: options.body || null, start: performance.now(), end: null };
+    const method = (options.method || "GET").toUpperCase();
+    const call = { path, method, body: options.body || null, start: performance.now(), end: null };
     b.calls.push(call);
     if (b.offline) throw new TypeError("Failed to fetch");
     if (path === "/stop-speech" || path === "/stop-motion") {
@@ -38,8 +46,15 @@ const FAKE_BRIDGE = `
     call.end = performance.now();
     if (b.failures[path]) return new Response(b.failures[path], { status: 500 });
     if (path === "/status") {
-      return new Response(JSON.stringify({ connected: false, reconnecting: false, attempts: 0, awake: null,
-        battery: null, charging: null, lastError: null, hostIp: null, pepperIp: null }));
+      return new Response(JSON.stringify({ connected: b.connected, reconnecting: false, attempts: 0, awake: null,
+        battery: null, charging: null, lastError: null,
+        hostIp: b.connected ? "1.1.1.1" : null, pepperIp: b.connected ? "2.2.2.2" : null }));
+    }
+    if (path === "/story" && method === "GET") {
+      return new Response(JSON.stringify(b.story ?? { version: 1, eyeColor: "#ffffff", items: [] }));
+    }
+    if (path === "/story" && method === "POST") {
+      b.story = JSON.parse(call.body);
     }
     return new Response(JSON.stringify({ success: true }));
   };`;
@@ -230,5 +245,11 @@ export async function openControllerPage() {
     return result.value;
   }
 
-  return { evaluate, exceptions, close };
+  async function reload() {
+    const loaded = cdp.once("Page.loadEventFired");
+    await cdp.send("Page.reload", { ignoreCache: true });
+    await loaded;
+  }
+
+  return { evaluate, exceptions, close, reload };
 }

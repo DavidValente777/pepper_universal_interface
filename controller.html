@@ -86,6 +86,10 @@
             <label for="brightnessSlider">Tablet brightness <span id="brightnessValue" class="slider-value">–</span></label>
             <input type="range" id="brightnessSlider" min="0" max="100" step="1" value="100" disabled />
           </div>
+          <div class="slider-group eye-color-group">
+            <label for="eyeColorPicker">Eye colour</label>
+            <input type="color" id="eyeColorPicker" class="eye-color-picker" value="#ffffff" disabled />
+          </div>
         </div>
       </div>
 
@@ -156,6 +160,9 @@
           <input id="speechText" type="text" placeholder="Type what Pepper should say..." />
           <div class="row">
             <button id="speakBtn">Speak</button>
+            <label class="animated-say-option" title="Pepper gestures while speaking">
+              <input type="checkbox" id="speechAnimated" /> Animated say
+            </label>
           </div>
         </div>
 
@@ -225,6 +232,9 @@
           <div class="add-block-card speech">
             <h3>Speech</h3>
             <input id="timelineSpeech" type="text" placeholder="What should Pepper say?" />
+            <label class="animated-say-option" title="Pepper gestures while speaking">
+              <input type="checkbox" id="timelineSpeechAnimated" /> Animated say
+            </label>
             <button id="addSpeechBlock">Add to Timeline</button>
           </div>
 

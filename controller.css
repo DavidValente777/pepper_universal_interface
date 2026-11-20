@@ -1410,3 +1410,34 @@ kbd {
 .camera-status.error {
   color: #991b1b;
 }
+
+/* Animated say option (Instant Send speech card, Sequence Builder speech card) */
+.animated-say-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.animated-say-option input {
+  width: auto;
+  margin: 0;
+}
+
+.eye-color-group input[type="color"] {
+  width: 56px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid #ccc;
+  border-radius: 6px;
+  cursor: pointer;
+  background: none;
+}
+
+.eye-color-group input[type="color"]:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
