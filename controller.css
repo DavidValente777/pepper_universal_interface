@@ -1535,8 +1535,8 @@ kbd {
 }
 .story-item {
   display: grid;
-  grid-template-columns: auto auto auto 110px 1fr auto auto;
-  grid-template-areas: "drag num play type body played del" ". . . . err . .";
+  grid-template-columns: auto auto auto 110px 1fr auto 40px auto;
+  grid-template-areas: "drag num play type body played audio del" ". . . . err . . .";
   align-items: center;
   column-gap: 12px;
   padding: 10px 12px;
@@ -1637,6 +1637,20 @@ kbd {
 .story-item.played .story-played {
   visibility: visible;
 }
+.story-audio {
+  grid-area: audio;
+  background: none;
+  color: var(--primary);
+  font-size: 18px;
+  padding: 6px 8px;
+}
+.story-audio:hover:not(:disabled) {
+  background: #dbeafe;
+}
+.story-audio:disabled {
+  color: #d1d5db;
+  cursor: not-allowed;
+}
 .story-delete {
   grid-area: del;
   background: none;
@@ -1686,8 +1700,8 @@ kbd {
 
 @media (max-width: 760px) {
   .story-item {
-    grid-template-columns: auto auto 1fr auto auto;
-    grid-template-areas: "drag play type played del" "body body body body body" "err err err err err";
+    grid-template-columns: auto auto 1fr auto auto auto;
+    grid-template-areas: "drag play type played audio del" "body body body body body body" "err err err err err err";
     row-gap: 8px;
   }
   .story-number { display: none; }

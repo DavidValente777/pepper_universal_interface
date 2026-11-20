@@ -6,6 +6,8 @@
 # ///
 import argparse
 import os
+import shutil
+import subprocess
 import threading
 import time
 import qi
@@ -30,6 +32,7 @@ tablet = None
 tts = None
 animated_speech = None
 leds = None
+file_manager = None
 animation_player = None
 motion = None
 behavior_manager = None
@@ -88,6 +91,29 @@ def save_story(story):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(story, f)
     os.replace(tmp, STORY_PATH)
+
+
+# Speech saved as an audio file (Story page "download audio"). Pepper writes it
+# to one fixed file in /home/nao (ALFileManager can only read from there), so
+# requests take turns. MP3 needs ffmpeg on this computer; without it the WAV
+# is sent as it is.
+SPEECH_AUDIO_NAME = "pepper_controller_speech.wav"
+SPEECH_AUDIO_PATH = "/home/nao/" + SPEECH_AUDIO_NAME
+speech_audio_lock = threading.Lock()
+FFMPEG = shutil.which("ffmpeg")
+
+
+def speech_audio(text):
+    """Returns (content type, bytes) of Pepper saying `text` at the current pitch."""
+    with speech_audio_lock:
+        tts.sayToFile(f"\\vct={voice_pitch}\\ {text}", SPEECH_AUDIO_PATH)
+        wav = bytes(file_manager.getFileContents(SPEECH_AUDIO_NAME))
+    if not FFMPEG:
+        return "audio/wav", wav
+    mp3 = subprocess.run([FFMPEG, "-loglevel", "error", "-f", "wav", "-i", "pipe:0",
+                          "-codec:a", "libmp3lame", "-q:a", "2", "-f", "mp3", "pipe:1"],
+                         input=wav, capture_output=True, timeout=30, check=True).stdout
+    return "audio/mpeg", mp3
 
 
 BATTERY_CURRENT_KEY = "Device/SubDeviceList/Battery/Current/Sensor/Value"
@@ -329,6 +355,28 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200, {"success": True})
             except Exception as e:
                 self.send_json(500, {"success": False, "error": str(e)})
+            return
+
+        if self.path == "/speech-audio":
+            if not self.require_connection_json():
+                return
+            try:
+                text = str(self.read_json().get("text", "")).strip()
+            except (ValueError, AttributeError):
+                text = ""
+            if not text:
+                self.send_json(400, {"success": False, "error": "No text provided"})
+                return
+            try:
+                content_type, audio = speech_audio(text)
+            except Exception as e:
+                self.send_json(500, {"success": False, "error": f"Could not make the audio file: {e}"})
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(audio)))
+            self.end_headers()
+            self.wfile.write(audio)
             return
 
         if self.path == "/eyes":
@@ -1180,7 +1228,7 @@ def connect_pepper(reconnecting=False):
     not woken up and the tablet brightness is left alone: after a network
     drop Pepper keeps its state, and a robot that was put to rest (e.g. by
     Emergency Stop) must never start moving on its own."""
-    global tablet, tts, animated_speech, leds, animation_player, motion, behavior_manager, audio_device, memory, battery, video_device, app, is_connected
+    global tablet, tts, animated_speech, leds, file_manager, animation_player, motion, behavior_manager, audio_device, memory, battery, video_device, app, is_connected
     global camera_handles, camera_index
 
     # Clean up old session if any. A plain qi.Session is used rather than
@@ -1206,6 +1254,7 @@ def connect_pepper(reconnecting=False):
     tts = session.service("ALTextToSpeech")
     animated_speech = session.service("ALAnimatedSpeech")
     leds = session.service("ALLeds")
+    file_manager = session.service("ALFileManager")
     animation_player = session.service("ALAnimationPlayer")
     motion = session.service("ALMotion")
     behavior_manager = session.service("ALBehaviorManager")

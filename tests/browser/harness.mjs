@@ -53,6 +53,9 @@ const FAKE_BRIDGE = `
     if (path === "/story" && method === "GET") {
       return new Response(JSON.stringify(b.story ?? { version: 1, eyeColor: "#ffffff", items: [] }));
     }
+    if (path === "/speech-audio") {
+      return new Response(new Uint8Array([73, 68, 51, 4]), { headers: { "Content-Type": b.audioType || "audio/mpeg" } });
+    }
     if (path === "/story" && method === "POST") {
       b.story = JSON.parse(call.body);
     }

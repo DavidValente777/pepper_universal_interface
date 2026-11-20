@@ -195,3 +195,54 @@ test("the story's eye colour is applied to Pepper on connect", async () => {
   assert.deepEqual(result.after, [{ color: "#ff0000" }]);
   assert.equal(result.picker, "#ff0000");
 });
+
+// Clicks the ⬇ of item `index` and returns the request body and the downloaded file
+const DOWNLOAD = (index) => `
+  let saved = null;
+  URL.createObjectURL = (blob) => { saved = { blob }; return "blob:audio"; };
+  URL.revokeObjectURL = () => {};
+  const realClick = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () { if (saved) saved.name = this.download; };
+  document.querySelectorAll("#storyList .story-item")[${index}].querySelector(".story-audio").click();
+  for (let i = 0; i < 50 && !(saved && saved.name); i++) await new Promise((r) => setTimeout(r, 20));
+  HTMLAnchorElement.prototype.click = realClick;
+  return { bodies: ${BODIES("/speech-audio")}, name: saved && saved.name, type: saved && saved.blob.type,
+    error: document.querySelectorAll("#storyList .story-error")[${index}].textContent };`;
+
+test("only speech lines have a download-audio button", async () => {
+  await fresh([item("a", "say", { text: "x" }), item("b", "animatedSay", { text: "y" }),
+    item("c", "dance", { motion: HEY }), item("d", "image", { name: "", imageData: "" })]);
+  const has = await page.evaluate(`return [...document.querySelectorAll("#storyList .story-item")]
+    .map((li) => !!li.querySelector(".story-audio"));`);
+  assert.deepEqual(has, [true, true, false, false]);
+});
+
+test("⬇ downloads the line as a numbered MP3 named after its first words", async () => {
+  await fresh([item("a", "say", { text: "x" }), item("b", "animatedSay", { text: "Hello there — Pepper here, nice to meet you all!" })]);
+  const result = await page.evaluate(DOWNLOAD(1));
+  assert.deepEqual(result.bodies, [{ text: "Hello there — Pepper here, nice to meet you all!" }]);
+  assert.equal(result.name, "02_hello-there-pepper-here-nice.mp3");
+  assert.equal(result.type, "audio/mpeg");
+  assert.equal(result.error, "");
+});
+
+test("⬇ saves a .wav when the bridge has no ffmpeg", async () => {
+  await fresh([item("a", "say", { text: "Hi" })]);
+  const result = await page.evaluate(`__bridge.audioType = "audio/wav"; ${DOWNLOAD(0).replace("return {", "const out = {")}
+    delete __bridge.audioType; return out;`);
+  assert.equal(result.name, "01_hi.wav");
+});
+
+test("⬇ on an empty line says so, and a failure shows on the item", async () => {
+  await fresh([item("a", "say", { text: " " }), item("b", "say", { text: "Hi" })]);
+  const empty = await page.evaluate(DOWNLOAD(0));
+  assert.deepEqual([empty.bodies, empty.error], [[], "Nothing to say"]);
+  const failed = await page.evaluate(`__bridge.failures["/speech-audio"] = "robot busy"; ${DOWNLOAD(1)}`);
+  assert.equal(failed.error, "robot busy");
+});
+
+test("⬇ is disabled while disconnected", async () => {
+  await fresh([item("a", "say", { text: "Hi" })], { connected: false });
+  const disabled = await page.evaluate(`return document.querySelector("#storyList .story-audio").disabled;`);
+  assert.equal(disabled, true);
+});

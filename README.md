@@ -116,6 +116,7 @@ Made for scripted conversations, e.g. Pepper talking with a presenter on camera.
 - **▶ plays immediately and independently.** Pressing a speech while Pepper is still talking cuts it off mid-sentence and says the new line. Images and dances can run while Pepper talks; a new dance stops the previous one.
 - Played items get a ✓ so you can see where you are; **Reset marks** clears them between takes.
 - **STOP** stops speech, dances and motions at once (the tablet is left as it is).
+- **⬇** on a speech line downloads it as an audio file (`02_hello-there.mp3`), made by Pepper's own voice engine at the current pitch: a clean recording without room sound, handy for the edit. It's an MP3 when `ffmpeg` is installed on the computer running the bridge, otherwise a WAV. The volume slider doesn't affect it.
 - Volume, pitch, brightness and eye colour are on the page too. The eye colour is saved with the story and applied when Pepper connects.
 - **Saving is automatic**, to `stories/story.json` next to `bridge.py` on this computer, so reloading the page or restarting the browser loses nothing. You can edit the story without a robot connected. **Export** downloads a copy (images included) that **Import** loads on another computer.
 
@@ -130,6 +131,7 @@ Made for scripted conversations, e.g. Pepper talking with a presenter on camera.
 | POST | `/connect` | Connect to a robot (`hostIp`, `pepperIp`; `reconnect: true` skips waking the robot) |
 | POST | `/disconnect` | Disconnect from the robot |
 | POST | `/speak` | Make Pepper say text (`text`; `animated: true` gestures while speaking; `interrupt: true` stops the current speech first) |
+| POST | `/speech-audio` | Pepper's voice saying `text` as an audio file (MP3 with `ffmpeg`, else WAV), without speaking it |
 | POST | `/eyes` | Set the eye colour (`color` as `#rrggbb`) |
 | GET | `/story` | The saved Story page script (an empty story if none was saved yet). Works without a robot |
 | POST | `/story` | Save the Story page script (max 50 MB). Works without a robot |

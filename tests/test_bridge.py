@@ -10,8 +10,11 @@ import os
 import sys
 import tempfile
 import threading
+import io
+import shutil
 import types
 import unittest
+import wave
 import urllib.error
 import urllib.request
 from unittest.mock import MagicMock
@@ -19,6 +22,17 @@ from unittest.mock import MagicMock
 sys.modules.setdefault("qi", types.ModuleType("qi"))
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 import bridge  # noqa: E402
+
+
+def tiny_wav():
+    """0.1 s of silence in Pepper's TTS format (16-bit mono 22050 Hz)."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(22050)
+        w.writeframes(b"\0\0" * 2205)
+    return buf.getvalue()
 
 
 class BridgeTest(unittest.TestCase):
@@ -43,9 +57,21 @@ class BridgeTest(unittest.TestCase):
         bridge.tts = MagicMock()
         bridge.animated_speech = MagicMock()
         bridge.leds = MagicMock()
+        bridge.file_manager = MagicMock()
+        bridge.file_manager.getFileContents.return_value = bytearray(tiny_wav())
+        bridge.FFMPEG = shutil.which("ffmpeg")
 
     def tearDown(self):
         self.tmp.cleanup()
+
+    def request_raw(self, path, body):
+        req = urllib.request.Request(f"http://127.0.0.1:{self.port}{path}", data=json.dumps(body).encode("utf-8"),
+                                     method="POST", headers={"Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.headers.get("Content-Type"), r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.headers.get("Content-Type"), e.read()
 
     def request(self, method, path, body=None):
         data = None if body is None else json.dumps(body).encode("utf-8")
@@ -93,6 +119,35 @@ class BridgeTest(unittest.TestCase):
     def test_eyes_needs_connection(self):
         bridge.is_connected = False
         status, _ = self.request("POST", "/eyes", {"color": "#ff8000"})
+        self.assertEqual(status, 503)
+
+    # /speech-audio
+
+    def test_speech_audio_saves_with_pitch_and_returns_wav_without_ffmpeg(self):
+        bridge.FFMPEG = None
+        bridge.voice_pitch = 120
+        status, ctype, body = self.request_raw("/speech-audio", {"text": "Hello"})
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "audio/wav")
+        self.assertEqual(body, tiny_wav())
+        bridge.tts.sayToFile.assert_called_once_with("\\vct=120\\ Hello", "/home/nao/pepper_controller_speech.wav")
+        bridge.file_manager.getFileContents.assert_called_once_with("pepper_controller_speech.wav")
+        bridge.tts.say.assert_not_called()
+
+    @unittest.skipUnless(shutil.which("ffmpeg"), "ffmpeg not installed")
+    def test_speech_audio_is_mp3_when_ffmpeg_is_available(self):
+        status, ctype, body = self.request_raw("/speech-audio", {"text": "Hello"})
+        self.assertEqual(status, 200)
+        self.assertEqual(ctype, "audio/mpeg")
+        self.assertTrue(body.startswith(b"ID3") or body[:2] in (b"\xff\xfb", b"\xff\xf3", b"\xff\xf2"), body[:4])
+
+    def test_speech_audio_needs_text(self):
+        status, _, _ = self.request_raw("/speech-audio", {"text": "  "})
+        self.assertEqual(status, 400)
+
+    def test_speech_audio_needs_connection(self):
+        bridge.is_connected = False
+        status, _, _ = self.request_raw("/speech-audio", {"text": "Hello"})
         self.assertEqual(status, 503)
 
     # /story

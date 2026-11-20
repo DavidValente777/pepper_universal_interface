@@ -191,7 +191,9 @@ function createStoryItemElement(item, index) {
     <button class="story-play" title="Play now" aria-label="Play now">▶</button>
     <span class="story-type">${escapeHtml(STORY_TYPE_LABELS[item.type])}</span>
     <div class="story-body"></div>
-    <span class="story-played" title="Played">✓</span>
+    <span class="story-played" title="Played">✓</span>${isSpeechItem(item)
+      ? '<button class="story-audio" title="Download this line as an audio file" aria-label="Download as audio">⬇</button>'
+      : ""}
     <button class="story-delete" title="Delete" aria-label="Delete">🗑</button>
     <div class="story-error"></div>`;
   storyItemBody(item, li);
@@ -205,6 +207,15 @@ function storyItemCreatedHook(li, item) {
   const play = li.querySelector(".story-play");
   play.disabled = !canPlayStoryItem(item);
   play.addEventListener("click", () => playStoryItem(item.id));
+  const audio = li.querySelector(".story-audio");
+  if (audio) {
+    audio.disabled = !isConnected;
+    audio.addEventListener("click", () => downloadStoryAudio(item.id));
+  }
+}
+
+function isSpeechItem(item) {
+  return item.type === "say" || item.type === "animatedSay";
 }
 
 function renderStory() {
@@ -349,6 +360,69 @@ async function playStoryItem(id) {
   }
 }
 
+// "02_hello-there-pepper-here-nice": script position plus the first words
+function storyAudioFileName(item, extension) {
+  const number = String(story.items.indexOf(item) + 1).padStart(2, "0");
+  const words = item.text
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 5)
+    .join("-");
+  return `${number}_${words || "line"}.${extension}`;
+}
+
+// Pepper's voice saved to a file (not spoken) and downloaded: MP3, or WAV
+// when the bridge's computer has no ffmpeg
+async function downloadStoryAudio(id) {
+  const item = story.items.find((i) => i.id === id);
+  if (!item) return;
+  const text = item.text.trim();
+  setStoryItemError(id, text ? "" : "Nothing to say");
+  if (!text) return;
+  const button = storyItemElement(id)?.querySelector(".story-audio");
+  if (button) {
+    button.disabled = true;
+    button.textContent = "…";
+  }
+  try {
+    const r = await postJson("/speech-audio", { text });
+    if (!r.ok) {
+      const body = await r.text();
+      let message = body;
+      try {
+        message = JSON.parse(body).error || body;
+      } catch {
+        // plain-text error
+      }
+      throw new Error(message || `HTTP ${r.status}`);
+    }
+    const blob = await r.blob();
+    const extension = (r.headers.get("Content-Type") || "").includes("wav") ? "wav" : "mp3";
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = storyAudioFileName(item, extension);
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (error) {
+    setStoryItemError(id, error.message);
+    logError("Story audio", error.message);
+  } finally {
+    const current = storyItemElement(id)?.querySelector(".story-audio");
+    if (current) {
+      current.disabled = !isConnected;
+      current.textContent = "⬇";
+    }
+  }
+}
+
 async function stopStory() {
   const results = await Promise.allSettled([postJson("/stop-speech"), postJson("/stop-motion")]);
   results.forEach((result, i) => {
@@ -368,6 +442,8 @@ function onStoryConnection(connected) {
   story.items.forEach((item) => {
     const play = storyItemElement(item.id)?.querySelector(".story-play");
     if (play) play.disabled = !canPlayStoryItem(item);
+    const audio = storyItemElement(item.id)?.querySelector(".story-audio");
+    if (audio) audio.disabled = !connected;
   });
   if (connected && storyLoaded) setEyeColor(story.eyeColor);
 }
