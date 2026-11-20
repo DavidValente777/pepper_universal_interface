@@ -5,6 +5,7 @@
 # ]
 # ///
 import argparse
+import os
 import threading
 import time
 import qi
@@ -27,6 +28,8 @@ HTTP_PORT = 8000
 
 tablet = None
 tts = None
+animated_speech = None
+leds = None
 animation_player = None
 motion = None
 behavior_manager = None
@@ -54,6 +57,38 @@ last_connection_error = None
 # the \vct=N\ TTS tag, since ALTextToSpeech's pitchShift parameter can only
 # raise the pitch, never lower it.
 voice_pitch = 100
+
+# The Story page's script, saved on this laptop so it survives page reloads,
+# browser crashes and cleared browser data. Images are embedded as data URIs.
+STORY_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "stories", "story.json")
+MAX_STORY_BYTES = 50 * 1024 * 1024
+EYE_COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def empty_story():
+    return {"version": 1, "eyeColor": "#ffffff", "items": []}
+
+
+def load_story():
+    """The saved story, or an empty one if none was saved yet. Raises if the
+    file exists but can't be read, so a broken file is never silently replaced."""
+    if not os.path.exists(STORY_PATH):
+        return empty_story()
+    with open(STORY_PATH, "r", encoding="utf-8") as f:
+        story = json.load(f)
+    if not isinstance(story, dict) or not isinstance(story.get("items"), list):
+        raise ValueError("story.json is not a story")
+    return story
+
+
+def save_story(story):
+    """Write atomically: a crash mid-write leaves the previous file intact."""
+    os.makedirs(os.path.dirname(STORY_PATH), exist_ok=True)
+    tmp = STORY_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(story, f)
+    os.replace(tmp, STORY_PATH)
+
 
 BATTERY_CURRENT_KEY = "Device/SubDeviceList/Battery/Current/Sensor/Value"
 
@@ -147,6 +182,13 @@ class Handler(SimpleHTTPRequestHandler):
         global tablet, is_connected, HOST_IP, PEPPER_IP
 
         parsed = urlparse(self.path)
+
+        if parsed.path == "/story":
+            try:
+                self.send_json(200, load_story())
+            except Exception as e:
+                self.send_json(500, {"success": False, "error": f"Could not read {STORY_PATH}: {e}"})
+            return
 
         # Return connection status (actually verifies the qi session is alive)
         if parsed.path == "/status":
@@ -270,6 +312,42 @@ class Handler(SimpleHTTPRequestHandler):
         global tablet, tts, is_connected, PEPPER_IP, HOST_IP, app, motion, voice_pitch
         global want_connected, reconnect_attempts, last_connection_error
 
+        if self.path == "/story":
+            if int(self.headers.get("Content-Length") or 0) > MAX_STORY_BYTES:
+                self.send_json(413, {"success": False, "error": "Story is too large (50 MB max)"})
+                self.close_connection = True
+                return
+            try:
+                story = self.read_json()
+            except ValueError:
+                story = None
+            if not isinstance(story, dict) or not isinstance(story.get("items"), list):
+                self.send_json(400, {"success": False, "error": "Not a story"})
+                return
+            try:
+                save_story(story)
+                self.send_json(200, {"success": True})
+            except Exception as e:
+                self.send_json(500, {"success": False, "error": str(e)})
+            return
+
+        if self.path == "/eyes":
+            if not self.require_connection_json():
+                return
+            try:
+                color = self.read_json().get("color", "")
+            except (ValueError, AttributeError):
+                color = ""
+            if not isinstance(color, str) or not EYE_COLOR_RE.match(color):
+                self.send_json(400, {"success": False, "error": "color must be #rrggbb"})
+                return
+            try:
+                leds.fadeRGB("FaceLeds", int(color[1:], 16), 0.2)
+                self.send_json(200, {"success": True})
+            except Exception as e:
+                self.send_json(500, {"success": False, "error": str(e)})
+            return
+
         # Handle connection request
         if self.path == "/connect":
             content_length = int(self.headers['Content-Length'])
@@ -347,10 +425,21 @@ class Handler(SimpleHTTPRequestHandler):
             data = json.loads(post_data.decode('utf-8'))
 
             text = data.get('text', '')
+            animated = bool(data.get('animated'))
+            interrupt = bool(data.get('interrupt'))
 
             if text:
                 try:
-                    tts.say(f"\\vct={voice_pitch}\\ {text}")
+                    # Cut off whatever Pepper is saying so the new line starts now;
+                    # the interrupted request's say() simply returns early
+                    if interrupt:
+                        tts.stopAll()
+                    tagged = f"\\vct={voice_pitch}\\ {text}"
+                    if animated:
+                        # Gestures while speaking, like Choregraphe's Animated Say
+                        animated_speech.say(tagged, {"bodyLanguageMode": "random"})
+                    else:
+                        tts.say(tagged)
                     self.send_response(200)
                     self.end_headers()
                     self.wfile.write(f"OK: Speaking '{text}'".encode("utf-8"))
@@ -1091,7 +1180,7 @@ def connect_pepper(reconnecting=False):
     not woken up and the tablet brightness is left alone: after a network
     drop Pepper keeps its state, and a robot that was put to rest (e.g. by
     Emergency Stop) must never start moving on its own."""
-    global tablet, tts, animation_player, motion, behavior_manager, audio_device, memory, battery, video_device, app, is_connected
+    global tablet, tts, animated_speech, leds, animation_player, motion, behavior_manager, audio_device, memory, battery, video_device, app, is_connected
     global camera_handles, camera_index
 
     # Clean up old session if any. A plain qi.Session is used rather than
@@ -1115,6 +1204,8 @@ def connect_pepper(reconnecting=False):
 
     tablet = session.service("ALTabletService")
     tts = session.service("ALTextToSpeech")
+    animated_speech = session.service("ALAnimatedSpeech")
+    leds = session.service("ALLeds")
     animation_player = session.service("ALAnimationPlayer")
     motion = session.service("ALMotion")
     behavior_manager = session.service("ALBehaviorManager")

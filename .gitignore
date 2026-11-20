@@ -20,3 +20,6 @@ Thumbs.db
 # Timeline exports (user data)
 *.json
 !package.json
+
+# Story page script (user data)
+stories/
