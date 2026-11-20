@@ -6,15 +6,42 @@ const speech = (id) => ({ id, type: "speech", text: "hi" });
 const motion = (id) => ({ id, type: "motion", motion: "animations/Stand/Gestures/Hey_1", displayName: "Hey" });
 const text = (id) => ({ id, type: "text", text: "t", fontSize: 110, color: "#000000" });
 const image = (id) => ({ id, type: "image", imageData: "data:image/jpeg;base64,AA", fileName: "a.jpg" });
+const animSpeech = (id) => ({ id, type: "speech", text: "hi", animated: true });
 const delay = (id) => ({ id, type: "delay", seconds: 2 });
 const ids = (steps) => steps.map((step) => step.map((b) => b.id));
 
-test("blockChannel groups text and image on the tablet", () => {
-  assert.equal(seq.blockChannel(speech(1)), "speech");
-  assert.equal(seq.blockChannel(motion(1)), "motion");
-  assert.equal(seq.blockChannel(text(1)), "tablet");
-  assert.equal(seq.blockChannel(image(1)), "tablet");
-  assert.equal(seq.blockChannel(delay(1)), "wait");
+test("blockChannels: animated speech uses speech and motion", () => {
+  assert.deepEqual(seq.blockChannels(speech(1)), ["speech"]);
+  assert.deepEqual(seq.blockChannels(animSpeech(1)), ["speech", "motion"]);
+  assert.deepEqual(seq.blockChannels(motion(1)), ["motion"]);
+  assert.deepEqual(seq.blockChannels(text(1)), ["tablet"]);
+  assert.deepEqual(seq.blockChannels(image(1)), ["tablet"]);
+  assert.deepEqual(seq.blockChannels(delay(1)), ["wait"]);
+});
+
+test("canJoinStep: animated speech and a motion cannot share a step", () => {
+  assert.equal(seq.canJoinStep([motion(1)], animSpeech(2)), false);
+  assert.equal(seq.canJoinStep([animSpeech(1)], motion(2)), false);
+  assert.equal(seq.canJoinStep([animSpeech(1)], text(2)), true);
+});
+
+test("conflictMessage explains animated speech conflicts", () => {
+  assert.equal(seq.conflictMessage(1, animSpeech(9), [motion(1)]),
+    "Step 2 already has a motion — animated speech also moves Pepper");
+  assert.equal(seq.conflictMessage(0, motion(9), [animSpeech(1)]),
+    "Step 1 already has an animated speech, which also moves Pepper");
+  assert.equal(seq.conflictMessage(0, speech(9), [animSpeech(1)]), "Step 1 already has a speech");
+});
+
+test("import: speech gets animated false by default, keeps true, and splits animated speech from a motion", () => {
+  let n = 0;
+  const hey = { type: "motion", motion: "animations/Stand/Gestures/Hey_1", displayName: "Hey" };
+  const parsed = seq.parseTimelineFile({ steps: [[{ type: "speech", text: "a" }, hey],
+    [{ type: "speech", text: "b", animated: true }, hey]] }, () => ++n);
+  assert.equal(parsed.steps[0][0].animated, false);
+  assert.equal(parsed.steps.length, 3);
+  assert.equal(parsed.steps[1][0].animated, true);
+  assert.equal(parsed.movedCount, 1);
 });
 
 test("canJoinStep refuses a second block on the same channel", () => {
@@ -30,10 +57,10 @@ test("canJoinStep ignores the block itself", () => {
 });
 
 test("conflictMessage names the step and the channel", () => {
-  assert.equal(seq.conflictMessage(1, motion(9)), "Step 2 already has a motion");
-  assert.equal(seq.conflictMessage(0, speech(9)), "Step 1 already has a speech");
-  assert.equal(seq.conflictMessage(2, image(9)), "Step 3 already has a tablet block (text or image)");
-  assert.equal(seq.conflictMessage(0, delay(9)), "Step 1 already has a wait");
+  assert.equal(seq.conflictMessage(1, motion(9), [motion(1)]), "Step 2 already has a motion");
+  assert.equal(seq.conflictMessage(0, speech(9), [speech(1)]), "Step 1 already has a speech");
+  assert.equal(seq.conflictMessage(2, image(9), [text(1)]), "Step 3 already has a tablet block (text or image)");
+  assert.equal(seq.conflictMessage(0, delay(9), [delay(1)]), "Step 1 already has a wait");
 });
 
 test("appendStep adds a new single-block step at the end", () => {

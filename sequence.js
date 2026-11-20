@@ -12,18 +12,34 @@ const CHANNEL_NAMES = {
 };
 const VALID_BLOCK_TYPES = Object.keys(BLOCK_CHANNELS);
 
-// Blocks on the same channel would fight over the same part of Pepper
-function blockChannel(block) {
-  return BLOCK_CHANNELS[block.type];
+// Blocks on the same channel would fight over the same part of Pepper.
+// Animated speech gestures while talking, so it also takes the motion channel.
+function blockChannels(block) {
+  if (block.type === "speech" && block.animated === true) return ["speech", "motion"];
+  return [BLOCK_CHANNELS[block.type]];
+}
+
+function isAnimatedSpeech(block) {
+  return block.type === "speech" && block.animated === true;
+}
+
+function blockUsingChannel(step, block, channel) {
+  return step.find((other) => other.id !== block.id && blockChannels(other).includes(channel)) || null;
 }
 
 function canJoinStep(step, block) {
-  const channel = blockChannel(block);
-  return !step.some((other) => other.id !== block.id && blockChannel(other) === channel);
+  return blockChannels(block).every((channel) => !blockUsingChannel(step, block, channel));
 }
 
-function conflictMessage(stepIndex, block) {
-  return `Step ${stepIndex + 1} already has ${CHANNEL_NAMES[blockChannel(block)]}`;
+function conflictMessage(stepIndex, block, step) {
+  const prefix = `Step ${stepIndex + 1} already has `;
+  const channel = blockChannels(block).find((c) => blockUsingChannel(step, block, c)) || blockChannels(block)[0];
+  const occupier = blockUsingChannel(step, block, channel);
+  if (channel === "motion" && isAnimatedSpeech(block)) return prefix + "a motion — animated speech also moves Pepper";
+  if (channel === "motion" && occupier && isAnimatedSpeech(occupier)) {
+    return prefix + "an animated speech, which also moves Pepper";
+  }
+  return prefix + CHANNEL_NAMES[channel];
 }
 
 function findBlock(steps, id) {
@@ -46,7 +62,7 @@ function moveBlockToStep(steps, id, stepIndex) {
   const block = findBlock(steps, id);
   const target = steps[stepIndex];
   if (!block || !target || target.includes(block)) return { steps, error: null };
-  if (!canJoinStep(target, block)) return { steps, error: conflictMessage(stepIndex, block) };
+  if (!canJoinStep(target, block)) return { steps, error: conflictMessage(stepIndex, block, target) };
   const next = steps.map((step, i) => (i === stepIndex ? [...step, block] : step.filter((b) => b.id !== id)));
   return { steps: next.filter((step) => step.length > 0), error: null };
 }
@@ -65,6 +81,7 @@ function validateBlock(block) {
   if (!block || typeof block !== "object" || !VALID_BLOCK_TYPES.includes(block.type)) return null;
   switch (block.type) {
     case "speech":
+      return typeof block.text === "string" ? { ...block, animated: block.animated === true } : null;
     case "text":
       return typeof block.text === "string" ? block : null;
     case "motion":
@@ -135,7 +152,7 @@ function parseTimelineFile(data, makeId) {
 if (typeof module !== "undefined") {
   module.exports = {
     VALID_BLOCK_TYPES,
-    blockChannel,
+    blockChannels,
     canJoinStep,
     conflictMessage,
     appendStep,
