@@ -92,17 +92,32 @@ The connection is polled every 5 seconds. If it drops, the server will attempt t
 |---------|-------------|
 | **Battery** | Battery level and charging state in the top bar, refreshed with the connection poll |
 | **Clear Tablet** | One big button that removes whatever is on the tablet (text, image, video, webpage) |
-| **Volume / Pitch / Brightness** | Sliders for speaker volume, voice pitch (50–200%) and tablet brightness; they show the robot's current values on connect |
+| **Tabs** | Two pages in the top bar: **Controller** (everything below) and **Story** (see [Story page](#story-page)). The last tab you used is remembered |
+| **Volume / Pitch / Brightness** | Sliders for speaker volume, voice pitch (50–200%) and tablet brightness; they show the robot's current values on connect. The same sliders appear on the Story page and stay in sync |
+| **Eye colour** | Colour picker that sets Pepper's eye LEDs (on both tabs) |
 | **Drive** | Toggle keyboard driving on, then hold ↑/↓ to drive, ←/→ to turn, Shift+←/→ to slide sideways (or hold the on-screen arrows). Release or press Space to stop. Speed is adjustable and capped at 0.35 m/s |
 | **Obstacle avoidance** | Toggle Pepper's built-in obstacle avoidance while driving (asks for confirmation; switches back on automatically when driving is switched off). The robot must allow deactivation of safety reflexes, otherwise it refuses and the page explains why |
 | **Automatic reconnect** | If the connection to Pepper drops, the bridge reconnects on its own (retrying with backoff, even with no browser open). If the bridge itself restarts, the page reconnects it. Reconnects never wake the robot or stop what it is doing |
-| **Speech** | Type text for Pepper to say immediately |
+| **Speech** | Type text for Pepper to say immediately; a new line cuts off whatever Pepper is still saying. Tick **Animated say** to make Pepper gesture while speaking (like Choregraphe's Animated Say) |
 | **Text Display** | Show text on Pepper's tablet with adjustable font size and colour |
 | **Image Display** | Drag & drop or select a JPG/PNG; it is shown as large as possible on the tablet (1280×800) without distorting its aspect ratio |
 | **Motions** | Play any animation installed on the robot — the list is loaded from the robot on connect (standard animations plus animations shipped with installed apps; system apps such as shutdown/reboot are excluded). A search box filters the motion pickers |
 | **Camera** | Live feed from the head (forehead) or mouth camera, or the eyes 3D sensor as infrared, depth, or infrared coloured by distance. Robots without a given camera get a clear error, and the feed is released when switched off |
-| **Sequence Builder** | Build a sequence of steps from speech, text, image, motion and delay blocks. Stack blocks in one step to run them at the same time (one per kind: speech, motion, tablet text/image, wait); the next step starts when all of them have finished. Drag a block onto a step to join it or into the gap between steps to make a new step. Arrows show the order. Export/import as JSON (older single-row exports still import). During playback the current step is highlighted, finished/failed/stopped blocks are marked, and errors are shown on the failing block |
+| **Sequence Builder** | Build a sequence of steps from speech, text, image, motion and delay blocks (speech blocks can be **Animated say**; an animated speech moves Pepper, so it can't share a step with a motion). Stack blocks in one step to run them at the same time (one per kind: speech, motion, tablet text/image, wait); the next step starts when all of them have finished. Drag a block onto a step to join it or into the gap between steps to make a new step. Arrows show the order. Export/import as JSON (older single-row exports still import). During playback the current step is highlighted, finished/failed/stopped blocks are marked, and errors are shown on the failing block |
 | **Error Log** | All runtime errors are logged in-page with a count indicator in the header bar |
+
+---
+
+## Story page
+
+Made for scripted conversations, e.g. Pepper talking with a presenter on camera. Prepare the script in advance, then press each line's ▶ at the right moment: nothing plays on its own, so you control the timing.
+
+- **Add items** with **+ Say**, **+ Animated say**, **+ Dance** (any animation installed on the robot) and **+ Image** (JPG/PNG shown full-screen on the tablet). Drag the ⠿ handle to reorder, 🗑 to delete (with a few seconds to **Undo**).
+- **▶ plays immediately and independently.** Pressing a speech while Pepper is still talking cuts it off mid-sentence and says the new line. Images and dances can run while Pepper talks; a new dance stops the previous one.
+- Played items get a ✓ so you can see where you are; **Reset marks** clears them between takes.
+- **STOP** stops speech, dances and motions at once (the tablet is left as it is).
+- Volume, pitch, brightness and eye colour are on the page too. The eye colour is saved with the story and applied when Pepper connects.
+- **Saving is automatic**, to `stories/story.json` next to `bridge.py` on this computer, so reloading the page or restarting the browser loses nothing. You can edit the story without a robot connected. **Export** downloads a copy (images included) that **Import** loads on another computer.
 
 ---
 
@@ -114,7 +129,10 @@ The connection is polled every 5 seconds. If it drops, the server will attempt t
 | GET | `/send?text=...&fontSize=...&color=...` | Display text on the tablet |
 | POST | `/connect` | Connect to a robot (`hostIp`, `pepperIp`; `reconnect: true` skips waking the robot) |
 | POST | `/disconnect` | Disconnect from the robot |
-| POST | `/speak` | Make Pepper say text (`text`) |
+| POST | `/speak` | Make Pepper say text (`text`; `animated: true` gestures while speaking; `interrupt: true` stops the current speech first) |
+| POST | `/eyes` | Set the eye colour (`color` as `#rrggbb`) |
+| GET | `/story` | The saved Story page script (an empty story if none was saved yet). Works without a robot |
+| POST | `/story` | Save the Story page script (max 50 MB). Works without a robot |
 | POST | `/send-image` | Display an image on the tablet (`imageData` as data URI) |
 | GET | `/camera?cam=0..4` | One camera frame as PNG (0 head, 1 mouth, 2 eyes infrared, 3 eyes depth, 4 infrared + distance colour) |
 | POST | `/camera-stop` | Release the camera subscriptions |
@@ -145,12 +163,17 @@ pepper_universal_interface/
 ├── controller.css           # Web UI styles
 ├── controller.js            # Web UI logic
 ├── sequence.js              # Sequence step model (shared by the page and the tests)
+├── story.js                 # Story page script model (shared by the page and the tests)
+├── story-page.js            # Story page logic
 ├── bridge.py                # Python HTTP server — qi bridge to the robot
 ├── run.py                   # One-command setup + launch (venv, deps, qi)
 ├── requirements.txt         # Python dependencies (pip install -r requirements.txt)
 ├── tests/
 │   ├── sequence.test.js     # Unit tests for sequence.js
-│   └── browser/             # Headless Chrome tests for the Sequence Builder
+│   ├── story.test.js        # Unit tests for story.js
+│   ├── test_bridge.py       # Bridge endpoint tests (robot mocked)
+│   └── browser/             # Headless Chrome tests for the pages
+├── stories/                 # The saved Story page script (created on first save, not in git)
 ├── docs/                    # Design notes and implementation plans
 └── README.md
 ```
@@ -159,11 +182,12 @@ pepper_universal_interface/
 
 ## Running the Tests
 
-The tests use Node's built-in test runner (Node 18+); no `npm install` is needed.
+The page tests use Node's built-in test runner (Node 18+); no `npm install` is needed. The bridge tests use Python's built-in `unittest`.
 
 ```bash
-node --test tests/sequence.test.js            # step model unit tests
-node --test tests/browser/*.test.mjs          # Sequence Builder in headless Chrome
+node --test tests/sequence.test.js tests/story.test.js            # step and story model unit tests
+node --test --test-concurrency=1 tests/browser/*.test.mjs         # pages in headless Chrome, one file at a time
+python3 -m unittest discover -s tests -p 'test_*.py'              # bridge endpoints (robot mocked, no qi needed)
 ```
 
 The browser tests need Google Chrome. Set `CHROME=/path/to/chrome` if it isn't on your PATH as `google-chrome`. They use a fake bridge, so no robot is required.
