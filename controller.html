@@ -298,7 +298,39 @@
       </section>
 
       <!-- Story (filled by story-page.js) -->
-      <section id="storyTab" hidden></section>
+      <section id="storyTab" hidden>
+        <p class="section-label">Story</p>
+        <div class="story-panel">
+          <div id="storyLoadError" class="story-load-error" hidden>
+            Could not load the saved story — changes are not being saved. Reload the page to try again.
+          </div>
+
+          <div class="story-toolbar">
+            <div class="story-add">
+              <button id="storyAddSay" class="story-add-btn say">+ Say</button>
+              <button id="storyAddAnimatedSay" class="story-add-btn animatedSay">+ Animated say</button>
+              <button id="storyAddDance" class="story-add-btn dance">+ Dance</button>
+              <button id="storyAddImage" class="story-add-btn image">+ Image</button>
+            </div>
+            <div class="story-file">
+              <span id="storySaveStatus" class="story-save-status"></span>
+              <button id="storyExport" class="story-secondary-btn">Export</button>
+              <button id="storyImportBtn" class="story-secondary-btn">Import</button>
+              <input type="file" id="storyImportInput" accept=".json,application/json" hidden />
+            </div>
+          </div>
+
+          <ol id="storyList" class="story-list"></ol>
+          <p id="storyEmpty" class="story-empty">
+            No lines yet. Add Say, Animated say, Dance or Image items above, in the order of the script.
+          </p>
+        </div>
+
+        <div id="storyUndoToast" class="story-toast" hidden role="status">
+          <span id="storyUndoText">Deleted</span>
+          <button id="storyUndoBtn">Undo</button>
+        </div>
+      </section>
 
       <!-- Error Log -->
       <p class="section-label">Error Log</p>
@@ -310,6 +342,8 @@
     </div>
 
     <script src="sequence.js"></script>
+    <script src="story.js"></script>
     <script src="controller.js"></script>
+    <script src="story-page.js"></script>
   </body>
 </html>
