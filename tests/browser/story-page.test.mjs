@@ -22,7 +22,7 @@ async function fresh(story = null, failures = {}) {
     localStorage.setItem("pepper.activeTab", "story");`);
   await page.reload();
   await page.evaluate(`
-    for (let i = 0; i < 50 && !storyLoaded && document.getElementById("storyLoadError").hidden; i++) {
+    for (let i = 0; i < 250 && !storyLoaded && document.getElementById("storyLoadError").hidden; i++) {
       await new Promise((r) => setTimeout(r, 20));
     }`);
 }

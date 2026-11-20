@@ -301,6 +301,34 @@
       <section id="storyTab" hidden>
         <p class="section-label">Story</p>
         <div class="story-panel">
+          <div id="storyNotConnected" class="story-not-connected" hidden>
+            Not connected to Pepper — the ▶ buttons work once you
+            <button id="storyGoConnect" class="story-link-btn">connect on the Controller tab</button>.
+            You can still edit the story.
+          </div>
+
+          <div class="story-controls">
+            <div class="robot-sliders story-sliders">
+              <div class="slider-group">
+                <label for="storyVolumeSlider">Volume <span id="storyVolumeValue" class="slider-value">–</span></label>
+                <input type="range" id="storyVolumeSlider" min="0" max="100" step="1" value="50" disabled />
+              </div>
+              <div class="slider-group">
+                <label for="storyPitchSlider">Voice pitch <span id="storyPitchValue" class="slider-value">–</span></label>
+                <input type="range" id="storyPitchSlider" min="50" max="200" step="5" value="100" disabled />
+              </div>
+              <div class="slider-group">
+                <label for="storyBrightnessSlider">Tablet brightness <span id="storyBrightnessValue" class="slider-value">–</span></label>
+                <input type="range" id="storyBrightnessSlider" min="0" max="100" step="1" value="100" disabled />
+              </div>
+              <div class="slider-group eye-color-group">
+                <label for="storyEyeColorPicker">Eye colour</label>
+                <input type="color" id="storyEyeColorPicker" class="eye-color-picker" value="#ffffff" disabled />
+              </div>
+            </div>
+            <button id="storyStopBtn" class="story-stop-btn" title="Stop speech, dances and motions now" disabled>STOP</button>
+          </div>
+
           <div id="storyLoadError" class="story-load-error" hidden>
             Could not load the saved story — changes are not being saved. Reload the page to try again.
           </div>
@@ -314,6 +342,7 @@
             </div>
             <div class="story-file">
               <span id="storySaveStatus" class="story-save-status"></span>
+              <button id="storyResetMarks" class="story-secondary-btn" title="Clear every ✓ for the next take">Reset marks</button>
               <button id="storyExport" class="story-secondary-btn">Export</button>
               <button id="storyImportBtn" class="story-secondary-btn">Import</button>
               <input type="file" id="storyImportInput" accept=".json,application/json" hidden />

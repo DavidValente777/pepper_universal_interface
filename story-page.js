@@ -105,8 +105,10 @@ async function loadStory() {
   renderStory();
 }
 
-// Replaced by the live controls (eye colour etc.) once they exist
-function storyLoadedHook() {}
+// The story's eye colour is shown in the pickers, and set on Pepper when connected
+function storyLoadedHook() {
+  setEyeColor(story.eyeColor, { send: isConnected });
+}
 
 // ─── Rendering ───────────────────────────────────────────────────────────────
 
@@ -193,8 +195,11 @@ function createStoryItemElement(item, index) {
   return li;
 }
 
-// Replaced by the live controls (play buttons)
-function storyItemCreatedHook() {}
+function storyItemCreatedHook(li, item) {
+  const play = li.querySelector(".story-play");
+  play.disabled = !canPlayStoryItem(item);
+  play.addEventListener("click", () => playStoryItem(item.id));
+}
 
 function renderStory() {
   storyPickers.splice(0).forEach(destroyMotionPicker);
@@ -278,6 +283,89 @@ function attachStoryDrag(li, id) {
   });
 }
 
+// ─── Playing ─────────────────────────────────────────────────────────────────
+
+function canPlayStoryItem(item) {
+  return isConnected && !(item.type === "image" && !item.imageData);
+}
+
+function storyItemElement(id) {
+  return storyEl("storyList").querySelector(`.story-item[data-id="${CSS.escape(id)}"]`);
+}
+
+function setStoryItemError(id, message) {
+  const li = storyItemElement(id);
+  if (li) li.querySelector(".story-error").textContent = message;
+}
+
+// The request that plays the item, or an error message when it can't be played
+function storyItemRequest(item) {
+  if (item.type === "say" || item.type === "animatedSay") {
+    const text = item.text.trim();
+    if (!text) return { error: "Nothing to say" };
+    // interrupt: Pepper stops mid-sentence and says this line now
+    return { send: () => postJson("/speak", { text, animated: item.type === "animatedSay", interrupt: true }) };
+  }
+  if (item.type === "dance") {
+    if (!item.motion) return { error: "Choose a dance first" };
+    return {
+      send: async () => {
+        await postJson("/stop-motion"); // two dances at once can't work
+        return postJson("/motion", { motion: item.motion });
+      },
+    };
+  }
+  if (item.type === "image") {
+    if (!item.imageData) return { error: "Choose an image first" };
+    return { send: () => postJson("/send-image", { imageData: item.imageData }) };
+  }
+  return { error: `Unknown item type "${item.type}"` };
+}
+
+// Every ▶ fires at once and on its own: nothing waits for an earlier item
+async function playStoryItem(id) {
+  const item = story.items.find((i) => i.id === id);
+  if (!item) return;
+  const { send, error } = storyItemRequest(item);
+  setStoryItemError(id, error || "");
+  if (!send) return;
+
+  setStory(updateItem(story, id, { played: true }), { render: false });
+  storyItemElement(id)?.classList.add("played", "playing");
+  try {
+    const r = await send();
+    if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
+  } catch (err) {
+    setStoryItemError(id, err.message);
+    logError(`Story ${STORY_TYPE_LABELS[item.type]}`, err.message);
+  } finally {
+    storyItemElement(id)?.classList.remove("playing");
+  }
+}
+
+async function stopStory() {
+  const results = await Promise.allSettled([postJson("/stop-speech"), postJson("/stop-motion")]);
+  results.forEach((result, i) => {
+    const what = i === 0 ? "speech" : "motion";
+    if (result.status === "rejected") logError("Story STOP", `Could not stop ${what}: ${result.reason.message}`);
+    else if (!result.value.ok) logError("Story STOP", `Could not stop ${what} (HTTP ${result.value.status})`);
+  });
+}
+
+function resetStoryMarks() {
+  setStory(resetMarks(story));
+}
+
+function onStoryConnection(connected) {
+  storyEl("storyNotConnected").hidden = connected;
+  storyEl("storyStopBtn").disabled = !connected;
+  story.items.forEach((item) => {
+    const play = storyItemElement(item.id)?.querySelector(".story-play");
+    if (play) play.disabled = !canPlayStoryItem(item);
+  });
+  if (connected && storyLoaded) setEyeColor(story.eyeColor);
+}
+
 // ─── Export / Import ─────────────────────────────────────────────────────────
 
 function exportStory() {
@@ -325,5 +413,15 @@ storyEl("storyImportInput").addEventListener("change", (e) => {
   e.target.value = "";
 });
 
+storyEl("storyResetMarks").addEventListener("click", resetStoryMarks);
+storyEl("storyStopBtn").addEventListener("click", stopStory);
+storyEl("storyGoConnect").addEventListener("click", () => showTab("controller"));
+storyEl("storyEyeColorPicker").addEventListener("change", (e) => setEyeColor(e.target.value));
+eyeColorListeners.push((color) => {
+  if (storyLoaded && story.eyeColor !== color) setStory({ ...story, eyeColor: color }, { render: false });
+});
+connectionListeners.push(onStoryConnection);
+
 renderStory();
+onStoryConnection(isConnected);
 loadStory();

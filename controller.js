@@ -126,17 +126,28 @@ function updateRobotStatus(status) {
 
 // ─── Volume / Pitch / Brightness ─────────────────────────────────────────────
 
+// Each setting has a slider on the Controller tab and one on the Story tab;
+// moving either moves both
 const SLIDERS = {
-  volume: { slider: "volumeSlider", label: "volumeValue", endpoint: "/set-volume", format: (v) => v + "%" },
-  pitch: { slider: "pitchSlider", label: "pitchValue", endpoint: "/set-pitch", format: (v) => v + "%" },
-  brightness: { slider: "brightnessSlider", label: "brightnessValue", endpoint: "/set-brightness", format: (v) => v + "%" },
+  volume: { sliders: ["volumeSlider", "storyVolumeSlider"], labels: ["volumeValue", "storyVolumeValue"],
+    endpoint: "/set-volume", format: (v) => v + "%" },
+  pitch: { sliders: ["pitchSlider", "storyPitchSlider"], labels: ["pitchValue", "storyPitchValue"],
+    endpoint: "/set-pitch", format: (v) => v + "%" },
+  brightness: { sliders: ["brightnessSlider", "storyBrightnessSlider"], labels: ["brightnessValue", "storyBrightnessValue"],
+    endpoint: "/set-brightness", format: (v) => v + "%" },
 };
 const sliderTimers = {};
 
+// Shows `value` on every slider and label of the setting
+function showSliderValue(cfg, value) {
+  cfg.sliders.forEach((id) => (document.getElementById(id).value = value));
+  cfg.labels.forEach((id) => (document.getElementById(id).textContent = cfg.format(value)));
+}
+
 function setSlidersEnabled(enabled) {
   Object.values(SLIDERS).forEach((cfg) => {
-    document.getElementById(cfg.slider).disabled = !enabled;
-    if (!enabled) document.getElementById(cfg.label).textContent = "–";
+    cfg.sliders.forEach((id) => (document.getElementById(id).disabled = !enabled));
+    if (!enabled) cfg.labels.forEach((id) => (document.getElementById(id).textContent = "–"));
   });
   document.querySelectorAll(".eye-color-picker").forEach((picker) => (picker.disabled = !enabled));
 }
@@ -171,10 +182,9 @@ async function loadRobotSettings() {
       if (!obstacleAvoidance && !driveEnabled) setObstacleAvoidance(true);
     }
     Object.entries(SLIDERS).forEach(([key, cfg]) => {
-      const slider = document.getElementById(cfg.slider);
-      if (data[key] !== null && data[key] !== undefined) slider.value = data[key];
-      document.getElementById(cfg.label).textContent = cfg.format(slider.value);
-      slider.disabled = false;
+      const known = data[key] !== null && data[key] !== undefined;
+      showSliderValue(cfg, known ? data[key] : document.getElementById(cfg.sliders[0]).value);
+      cfg.sliders.forEach((id) => (document.getElementById(id).disabled = false));
     });
   } catch (error) {
     logError("Robot settings", error.message);
@@ -183,7 +193,7 @@ async function loadRobotSettings() {
 
 async function sendSliderValue(key) {
   const cfg = SLIDERS[key];
-  const value = parseInt(document.getElementById(cfg.slider).value);
+  const value = parseInt(document.getElementById(cfg.sliders[0]).value);
   try {
     const r = await postJson(cfg.endpoint, { value });
     const result = await r.json();
@@ -193,10 +203,10 @@ async function sendSliderValue(key) {
   }
 }
 
-// Live-update while dragging, but at most one request per 150 ms per slider
-function onSliderInput(key) {
+// Live-update while dragging, but at most one request per 150 ms per setting
+function onSliderInput(key, sourceId) {
   const cfg = SLIDERS[key];
-  document.getElementById(cfg.label).textContent = cfg.format(document.getElementById(cfg.slider).value);
+  showSliderValue(cfg, document.getElementById(sourceId).value);
   clearTimeout(sliderTimers[key]);
   sliderTimers[key] = setTimeout(() => sendSliderValue(key), 150);
 }
@@ -283,6 +293,7 @@ function markConnected(hostIp, pepperIp, message) {
   const wasConnected = isConnected;
   isConnected = true;
   if (!wasConnected) {
+    document.querySelectorAll(".eye-color-picker").forEach((picker) => (picker.disabled = false));
     onConnected();
     connectionListeners.forEach((listener) => listener(true));
   }
@@ -1899,8 +1910,8 @@ document.getElementById("cameraToggleBtn").addEventListener("click", (e) => {
 document.getElementById("clearTabletBtn").addEventListener("click", clearScreen);
 document.getElementById("eyeColorPicker").addEventListener("change", (e) => setEyeColor(e.target.value));
 document.getElementById("reloadMotionsBtn").addEventListener("click", loadMotionsFromRobot);
-Object.keys(SLIDERS).forEach((key) => {
-  document.getElementById(SLIDERS[key].slider).addEventListener("input", () => onSliderInput(key));
+Object.entries(SLIDERS).forEach(([key, cfg]) => {
+  cfg.sliders.forEach((id) => document.getElementById(id).addEventListener("input", () => onSliderInput(key, id)));
 });
 document.getElementById("wakeUpBtn").addEventListener("click", wakeUpRobot);
 document.getElementById("stopMotionBtn").addEventListener("click", stopMotion);
