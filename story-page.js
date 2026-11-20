@@ -75,10 +75,16 @@ async function saveStoryNow() {
   if (storyUnsaved && !storySaveTimer) saveStoryNow();
 }
 
-// A reload right after typing must not lose the last line
-window.addEventListener("pagehide", () => {
+// A reload right after typing must not lose the last line. Browsers refuse
+// beacons above ~64 KB (any story with photos), so then the browser asks
+// "Leave site?" instead, which gives the autosave time to finish.
+window.addEventListener("beforeunload", (e) => {
   if (!storyLoaded || !storyUnsaved) return;
-  navigator.sendBeacon("/story", new Blob([JSON.stringify(story)], { type: "application/json" }));
+  const sent = navigator.sendBeacon("/story", new Blob([JSON.stringify(story)], { type: "application/json" }));
+  if (!sent) {
+    e.preventDefault();
+    e.returnValue = "";
+  }
 });
 
 async function loadStory() {

@@ -139,9 +139,23 @@ test("closing the page right after a change sends it with a beacon", async () =>
     const box = document.querySelector("#storyList .story-text");
     box.value = "Last words";
     box.dispatchEvent(new Event("input", { bubbles: true }));
-    window.dispatchEvent(new Event("pagehide"));
-    return sent && { url: sent.url, text: JSON.parse(await sent.blob.text()).items[0].text };`);
-  assert.deepEqual(beacon, { url: "/story", text: "Last words" });
+    const leaving = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(leaving);
+    return sent && { url: sent.url, text: JSON.parse(await sent.blob.text()).items[0].text, asked: leaving.defaultPrevented };`);
+  assert.deepEqual(beacon, { url: "/story", text: "Last words", asked: false });
+});
+
+test("a story too big for a beacon asks before leaving, so the autosave can finish", async () => {
+  await fresh({ version: 1, eyeColor: "#ffffff", items: [say("a", "")] });
+  const asked = await page.evaluate(`
+    navigator.sendBeacon = () => false; // what browsers do above ~64 KB (e.g. a story with photos)
+    const box = document.querySelector("#storyList .story-text");
+    box.value = "Unsaved";
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+    const leaving = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(leaving);
+    return leaving.defaultPrevented;`);
+  assert.equal(asked, true);
 });
 
 test("import replaces the story and reports skipped items", async () => {
