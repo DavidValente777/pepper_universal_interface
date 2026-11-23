@@ -124,7 +124,7 @@ function updateRobotStatus(status) {
   }
 }
 
-// ─── Volume / Pitch / Brightness ─────────────────────────────────────────────
+// ─── Volume / Pitch / Speed / Word gap / Brightness ─────────────────────────────────────────────
 
 // Each setting has a slider on the Controller tab and one on the Story tab;
 // moving either moves both
@@ -133,6 +133,10 @@ const SLIDERS = {
     endpoint: "/set-volume", format: (v) => v + "%" },
   pitch: { sliders: ["pitchSlider", "storyPitchSlider"], labels: ["pitchValue", "storyPitchValue"],
     endpoint: "/set-pitch", format: (v) => v + "%" },
+  speed: { sliders: ["speedSlider", "storySpeedSlider"], labels: ["speedValue", "storySpeedValue"],
+    endpoint: "/set-speed", format: (v) => v + "%" },
+  wordGap: { sliders: ["wordGapSlider", "storyWordGapSlider"], labels: ["wordGapValue", "storyWordGapValue"],
+    endpoint: "/set-word-gap", format: (v) => (Number(v) === 0 ? "Off" : v + " ms") },
   brightness: { sliders: ["brightnessSlider", "storyBrightnessSlider"], labels: ["brightnessValue", "storyBrightnessValue"],
     endpoint: "/set-brightness", format: (v) => v + "%" },
 };

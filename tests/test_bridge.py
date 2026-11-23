@@ -54,6 +54,8 @@ class BridgeTest(unittest.TestCase):
         bridge.is_connected = True
         bridge.ensure_connected = lambda: True
         bridge.voice_pitch = 100
+        bridge.voice_speed = 100
+        bridge.voice_word_gap = 0
         bridge.tts = MagicMock()
         bridge.animated_speech = MagicMock()
         bridge.leds = MagicMock()
@@ -88,14 +90,14 @@ class BridgeTest(unittest.TestCase):
     def test_speak_plain_uses_tts(self):
         status, _ = self.request("POST", "/speak", {"text": "Hi"})
         self.assertEqual(status, 200)
-        bridge.tts.say.assert_called_once_with("\\vct=100\\ Hi")
+        bridge.tts.say.assert_called_once_with("\\vct=100\\ \\rspd=100\\ Hi")
         bridge.animated_speech.say.assert_not_called()
         bridge.tts.stopAll.assert_not_called()
 
     def test_speak_animated_uses_animated_speech(self):
         status, _ = self.request("POST", "/speak", {"text": "Hi", "animated": True})
         self.assertEqual(status, 200)
-        bridge.animated_speech.say.assert_called_once_with("\\vct=100\\ Hi", {"bodyLanguageMode": "random"})
+        bridge.animated_speech.say.assert_called_once_with("\\vct=100\\ \\rspd=100\\ Hi", {"bodyLanguageMode": "random"})
         bridge.tts.say.assert_not_called()
 
     def test_speak_interrupt_stops_current_speech_first(self):
@@ -121,16 +123,43 @@ class BridgeTest(unittest.TestCase):
         status, _ = self.request("POST", "/eyes", {"color": "#ff8000"})
         self.assertEqual(status, 503)
 
+    # /set-speed
+
+    def test_set_speed_is_clamped_and_used_for_speech(self):
+        status, body = self.request("POST", "/set-speed", {"value": 20})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["value"], 50)
+        status, body = self.request("POST", "/set-speed", {"value": 75})
+        self.assertEqual(json.loads(body)["value"], 75)
+        self.request("POST", "/speak", {"text": "Hi"})
+        bridge.tts.say.assert_called_once_with("\\vct=100\\ \\rspd=75\\ Hi")
+
+    # /set-word-gap
+
+    def test_word_gap_pauses_between_plain_words_only(self):
+        status, body = self.request("POST", "/set-word-gap", {"value": 999})
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["value"], 300)
+        self.request("POST", "/set-word-gap", {"value": 120})
+        self.request("POST", "/speak", {"text": "Hello  there ^start(animations/Stand/Gestures/Hey_1) \\pau=500\\ friend"})
+        bridge.tts.say.assert_called_once_with(
+            "\\vct=100\\ \\rspd=100\\ Hello \\pau=120\\ there ^start(animations/Stand/Gestures/Hey_1) \\pau=500\\ friend")
+
+    def test_word_gap_off_leaves_text_alone(self):
+        self.assertEqual(bridge.with_word_gaps("a  b", 0), "a  b")
+        self.assertEqual(bridge.with_word_gaps("a b c", 50), "a \\pau=50\\ b \\pau=50\\ c")
+
     # /speech-audio
 
     def test_speech_audio_saves_with_pitch_and_returns_wav_without_ffmpeg(self):
         bridge.FFMPEG = None
         bridge.voice_pitch = 120
+        bridge.voice_speed = 80
         status, ctype, body = self.request_raw("/speech-audio", {"text": "Hello"})
         self.assertEqual(status, 200)
         self.assertEqual(ctype, "audio/wav")
         self.assertEqual(body, tiny_wav())
-        bridge.tts.sayToFile.assert_called_once_with("\\vct=120\\ Hello", "/home/nao/pepper_controller_speech.wav")
+        bridge.tts.sayToFile.assert_called_once_with("\\vct=120\\ \\rspd=80\\ Hello", "/home/nao/pepper_controller_speech.wav")
         bridge.file_manager.getFileContents.assert_called_once_with("pepper_controller_speech.wav")
         bridge.tts.say.assert_not_called()
 

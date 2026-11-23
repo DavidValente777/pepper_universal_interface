@@ -167,6 +167,36 @@ test("the Story volume slider moves the Controller one and sends once", async ()
   assert.deepEqual(result, { twin: "30", label: "30%", bodies: [{ value: 30 }] });
 });
 
+test("the Story speech speed slider moves the Controller one and sends once", async () => {
+  await fresh([]);
+  const result = await page.evaluate(`
+    const slider = document.getElementById("storySpeedSlider");
+    slider.value = 75;
+    slider.dispatchEvent(new Event("input"));
+    await new Promise((r) => setTimeout(r, 300));
+    return { twin: document.getElementById("speedSlider").value,
+      label: document.getElementById("storySpeedValue").textContent,
+      bodies: ${BODIES("/set-speed")} };`);
+  assert.deepEqual(result, { twin: "75", label: "75%", bodies: [{ value: 75 }] });
+});
+
+test("the Story word gap slider moves the Controller one and shows Off at 0", async () => {
+  await fresh([]);
+  const result = await page.evaluate(`
+    const slider = document.getElementById("storyWordGapSlider");
+    slider.value = 120;
+    slider.dispatchEvent(new Event("input"));
+    await new Promise((r) => setTimeout(r, 300));
+    const moved = { twin: document.getElementById("wordGapSlider").value,
+      label: document.getElementById("storyWordGapValue").textContent };
+    slider.value = 0;
+    slider.dispatchEvent(new Event("input"));
+    await new Promise((r) => setTimeout(r, 300));
+    return { ...moved, off: document.getElementById("wordGapValue").textContent,
+      bodies: ${BODIES("/set-word-gap")} };`);
+  assert.deepEqual(result, { twin: "120", label: "120 ms", off: "Off", bodies: [{ value: 120 }, { value: 0 }] });
+});
+
 test("eye colour syncs both pickers, the robot and the story", async () => {
   await fresh([]);
   const result = await page.evaluate(`

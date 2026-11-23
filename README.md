@@ -93,7 +93,7 @@ The connection is polled every 5 seconds. If it drops, the server will attempt t
 | **Battery** | Battery level and charging state in the top bar, refreshed with the connection poll |
 | **Clear Tablet** | One big button that removes whatever is on the tablet (text, image, video, webpage) |
 | **Tabs** | Two pages in the top bar: **Controller** (everything below) and **Story** (see [Story page](#story-page)). The last tab you used is remembered |
-| **Volume / Pitch / Brightness** | Sliders for speaker volume, voice pitch (50–200%) and tablet brightness; they show the robot's current values on connect. The same sliders appear on the Story page and stay in sync |
+| **Volume / Pitch / Speed / Word gap / Brightness** | Sliders for speaker volume, voice pitch (50–200%), speech speed (50–200%; lower it if Pepper talks too fast), word gap (0–300 ms of silence between words, Off by default) and tablet brightness; they show the robot's current values on connect. The same sliders appear on the Story page and stay in sync |
 | **Eye colour** | Colour picker that sets Pepper's eye LEDs (on both tabs) |
 | **Drive** | Toggle keyboard driving on, then hold ↑/↓ to drive, ←/→ to turn, Shift+←/→ to slide sideways (or hold the on-screen arrows). Release or press Space to stop. Speed is adjustable and capped at 0.35 m/s |
 | **Obstacle avoidance** | Toggle Pepper's built-in obstacle avoidance while driving (asks for confirmation; switches back on automatically when driving is switched off). The robot must allow deactivation of safety reflexes, otherwise it refuses and the page explains why |
@@ -116,8 +116,8 @@ Made for scripted conversations, e.g. Pepper talking with a presenter on camera.
 - **▶ plays immediately and independently.** Pressing a speech while Pepper is still talking cuts it off mid-sentence and says the new line. Images and dances can run while Pepper talks; a new dance stops the previous one.
 - Played items get a ✓ so you can see where you are; **Reset marks** clears them between takes.
 - **STOP** stops speech, dances and motions at once (the tablet is left as it is).
-- **⬇** on a speech line downloads it as an audio file (`02_hello-there.mp3`), made by Pepper's own voice engine at the current pitch: a clean recording without room sound, handy for the edit. It's an MP3 when `ffmpeg` is installed on the computer running the bridge, otherwise a WAV. The volume slider doesn't affect it.
-- Volume, pitch, brightness and eye colour are on the page too. The eye colour is saved with the story and applied when Pepper connects.
+- **⬇** on a speech line downloads it as an audio file (`02_hello-there.mp3`), made by Pepper's own voice engine at the current pitch, speed and word gap: a clean recording without room sound, handy for the edit. It's an MP3 when `ffmpeg` is installed on the computer running the bridge, otherwise a WAV. The volume slider doesn't affect it.
+- Volume, pitch, speech speed, word gap, brightness and eye colour are on the page too. The eye colour is saved with the story and applied when Pepper connects.
 - **Saving is automatic**, to `stories/story.json` next to `bridge.py` on this computer, so reloading the page or restarting the browser loses nothing. You can edit the story without a robot connected. **Export** downloads a copy (images included) that **Import** loads on another computer.
 
 ---
@@ -138,8 +138,8 @@ Made for scripted conversations, e.g. Pepper talking with a presenter on camera.
 | POST | `/send-image` | Display an image on the tablet (`imageData` as data URI) |
 | GET | `/camera?cam=0..4` | One camera frame as PNG (0 head, 1 mouth, 2 eyes infrared, 3 eyes depth, 4 infrared + distance colour) |
 | POST | `/camera-stop` | Release the camera subscriptions |
-| GET | `/settings` | Current `volume`, `brightness` (0–100) and voice `pitch` |
-| POST | `/set-volume` / `/set-brightness` / `/set-pitch` | Set a value (`value`: 0–100, 0–100, 50–200) |
+| GET | `/settings` | Current `volume`, `brightness` (0–100), voice `pitch`, speech `speed` and `wordGap` (ms) |
+| POST | `/set-volume` / `/set-brightness` / `/set-pitch` / `/set-speed` / `/set-word-gap` | Set a value (`value`: 0–100, 0–100, 50–200, 50–200, 0–300) |
 | POST | `/clear-tablet` | Hide the webview, image and video on the tablet |
 | POST | `/list-motions` | Animations (`animations`) and app animations (`behaviors`) installed on the robot |
 | POST | `/motion` | Play a named animation or app animation (`motion`) |

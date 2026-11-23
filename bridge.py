@@ -60,6 +60,29 @@ last_connection_error = None
 # the \vct=N\ TTS tag, since ALTextToSpeech's pitchShift parameter can only
 # raise the pitch, never lower it.
 voice_pitch = 100
+# Speaking rate in percent (50-200, 100 = normal), applied the same way via \rspd=N\
+voice_speed = 100
+# Extra pause between words in milliseconds (0-300, 0 = off), inserted as \pau=N\
+voice_word_gap = 0
+
+
+def with_word_gaps(text, gap):
+    """`text` with a \\pau=gap\\ tag between each pair of words. Words next to a
+    TTS tag (\\...\\) or an Animated Speech annotation (^...) are left alone."""
+    if gap <= 0:
+        return text
+    words = text.split()
+    out = words[:1]
+    for prev, word in zip(words, words[1:]):
+        if not prev.startswith(("\\", "^")) and not word.startswith(("\\", "^")):
+            out.append(f"\\pau={gap}\\")
+        out.append(word)
+    return " ".join(out)
+
+
+def voice_tags(text):
+    """`text` with the TTS tags for the current pitch, speed and word gap."""
+    return f"\\vct={voice_pitch}\\ \\rspd={voice_speed}\\ {with_word_gaps(text, voice_word_gap)}"
 
 # The Story page's script, saved on this laptop so it survives page reloads,
 # browser crashes and cleared browser data. Images are embedded as data URIs.
@@ -104,9 +127,9 @@ FFMPEG = shutil.which("ffmpeg")
 
 
 def speech_audio(text):
-    """Returns (content type, bytes) of Pepper saying `text` at the current pitch."""
+    """Returns (content type, bytes) of Pepper saying `text` at the current pitch, speed and word gap."""
     with speech_audio_lock:
-        tts.sayToFile(f"\\vct={voice_pitch}\\ {text}", SPEECH_AUDIO_PATH)
+        tts.sayToFile(voice_tags(text), SPEECH_AUDIO_PATH)
         wav = bytes(file_manager.getFileContents(SPEECH_AUDIO_NAME))
     if not FFMPEG:
         return "audio/wav", wav
@@ -287,11 +310,11 @@ class Handler(SimpleHTTPRequestHandler):
                 self.wfile.write(f"Error: {str(e)}".encode("utf-8"))
             return
 
-        # Current volume / tablet brightness / voice pitch, for the sliders
+        # Current volume / tablet brightness / voice pitch, speed and word gap, for the sliders
         if parsed.path == "/settings":
             if not self.require_connection_json():
                 return
-            settings = {"success": True, "pitch": voice_pitch, "volume": None, "brightness": None,
+            settings = {"success": True, "pitch": voice_pitch, "speed": voice_speed, "wordGap": voice_word_gap, "volume": None, "brightness": None,
                         "obstacleAvoidance": None}
             try:
                 settings["obstacleAvoidance"] = bool(motion.getExternalCollisionProtectionEnabled("Move"))
@@ -335,7 +358,7 @@ class Handler(SimpleHTTPRequestHandler):
         return SimpleHTTPRequestHandler.do_GET(self)
 
     def do_POST(self):
-        global tablet, tts, is_connected, PEPPER_IP, HOST_IP, app, motion, voice_pitch
+        global tablet, tts, is_connected, PEPPER_IP, HOST_IP, app, motion, voice_pitch, voice_speed, voice_word_gap
         global want_connected, reconnect_attempts, last_connection_error
 
         if self.path == "/story":
@@ -482,7 +505,7 @@ class Handler(SimpleHTTPRequestHandler):
                     # the interrupted request's say() simply returns early
                     if interrupt:
                         tts.stopAll()
-                    tagged = f"\\vct={voice_pitch}\\ {text}"
+                    tagged = voice_tags(text)
                     if animated:
                         # Gestures while speaking, like Choregraphe's Animated Say
                         animated_speech.say(tagged, {"bodyLanguageMode": "random"})
@@ -729,7 +752,7 @@ class Handler(SimpleHTTPRequestHandler):
                 self.send_json(200, {"success": True})
             return
 
-        if self.path in ("/set-volume", "/set-brightness", "/set-pitch"):
+        if self.path in ("/set-volume", "/set-brightness", "/set-pitch", "/set-speed", "/set-word-gap"):
             if not self.require_connection_json():
                 return
             try:
@@ -744,9 +767,15 @@ class Handler(SimpleHTTPRequestHandler):
                 elif self.path == "/set-brightness":
                     value = clamp(value, 0, 100)
                     tablet.setBrightness(value / 100.0)
-                else:
+                elif self.path == "/set-pitch":
                     value = clamp(value, 50, 200)
                     voice_pitch = value
+                elif self.path == "/set-speed":
+                    value = clamp(value, 50, 200)
+                    voice_speed = value
+                else:
+                    value = clamp(value, 0, 300)
+                    voice_word_gap = value
                 self.send_json(200, {"success": True, "value": value})
             except Exception as e:
                 self.send_json(500, {"success": False, "error": str(e)})
