@@ -5,6 +5,8 @@
 # ]
 # ///
 import argparse
+import collections
+import hashlib
 import os
 import shutil
 import subprocess
@@ -37,6 +39,7 @@ animation_player = None
 motion = None
 behavior_manager = None
 audio_device = None
+audio_player = None
 memory = None
 battery = None
 video_device = None
@@ -139,6 +142,127 @@ def speech_audio(text):
     return "audio/mpeg", mp3
 
 
+# Story page sounds. Pepper's ALAudioPlayer streams them from this bridge
+# (playWebStream with a http://HOST_IP:HTTP_PORT/sound/... URL), so nothing is
+# copied onto the robot. The last few sounds stay in memory, named after a
+# hash of their bytes so replaying one reuses the same URL.
+SOUND_TYPES = {"audio/mpeg": "mp3", "audio/mp3": "mp3", "audio/wav": "wav", "audio/x-wav": "wav",
+               "audio/wave": "wav", "audio/vnd.wave": "wav"}
+SOUND_DATA_RE = re.compile(r"^data:(audio/[\w.+-]+)(?:;[^,;]*)*;base64,", re.IGNORECASE)
+MAX_SOUND_BYTES = 25 * 1024 * 1024   # request size: a 15 MB file as a base64 data URI, plus slack
+SOUND_CACHE_SIZE = 8
+SOUND_START_WAIT_MS = 1500           # long enough to catch a stream that fails to start
+sounds = collections.OrderedDict()   # "<hash>.<ext>" -> (content type, bytes)
+sounds_lock = threading.Lock()
+
+
+def store_sound(data_uri):
+    """Keeps a data:audio/... URI's bytes for GET /sound/<name>; returns the name.
+    Raises ValueError for anything that isn't a base64 MP3 or WAV."""
+    match = SOUND_DATA_RE.match(data_uri) if isinstance(data_uri, str) else None
+    if not match:
+        raise ValueError("Not an audio file")
+    content_type = match.group(1).lower()
+    if content_type not in SOUND_TYPES:
+        raise ValueError(f"Unsupported audio type {content_type} (use MP3 or WAV)")
+    try:
+        audio = base64.b64decode(data_uri[match.end():], validate=True)
+    except (ValueError, TypeError):
+        raise ValueError("The audio data is damaged")
+    if not audio:
+        raise ValueError("The audio file is empty")
+    name = f"{hashlib.sha1(audio).hexdigest()[:16]}.{SOUND_TYPES[content_type]}"
+    with sounds_lock:
+        sounds[name] = (content_type, audio)
+        sounds.move_to_end(name)
+        while len(sounds) > SOUND_CACHE_SIZE:
+            sounds.popitem(last=False)
+    return name
+
+
+# A sound's "dance along" repeats until the sound ends. Each loop has an id;
+# a new sound, STOP (sound or motion) or another motion moves dance_loop_id
+# on, which ends the loop that had the old id.
+dance_loop_lock = threading.Lock()
+dance_loop_id = 0
+DANCE_LOOP_POLL_MS = 300
+DANCE_MIN_SECONDS = 0.3   # a "dance" that ends sooner didn't really run: don't spin on it
+
+
+def end_dance_loop():
+    """Ends the running dance loop (if any) and returns the id for a new one."""
+    global dance_loop_id
+    with dance_loop_lock:
+        dance_loop_id += 1
+        return dance_loop_id
+
+
+def dance_loop_running(loop_id):
+    with dance_loop_lock:
+        return dance_loop_id == loop_id
+
+
+def stop_behavior(name):
+    if name in behavior_manager.getRunningBehaviors():
+        behavior_manager.stopBehavior(name)
+
+
+def dance_while_sound_plays(motion_name, sound_future, loop_id):
+    """Plays `motion_name` again and again until the sound ends, then stops it
+    mid-move. Runs in its own thread."""
+    def repeat():
+        while dance_loop_running(loop_id) and not sound_future.isFinished():
+            started = time.monotonic()
+            try:
+                run_motion(motion_name)
+            except Exception as e:
+                if dance_loop_running(loop_id):
+                    print(f"Warning: dance along {motion_name} failed: {e}")
+                return
+            if time.monotonic() - started < DANCE_MIN_SECONDS:
+                return
+
+    dancer = threading.Thread(target=repeat, daemon=True)
+    dancer.start()
+    while dancer.is_alive() and dance_loop_running(loop_id) and not sound_future.isFinished():
+        sound_future.wait(DANCE_LOOP_POLL_MS)
+    # The song ended (not replaced or stopped): stop the dance with it
+    with dance_loop_lock:
+        song_ended = dance_loop_id == loop_id
+    if song_ended and dancer.is_alive():
+        end_dance_loop()
+        try:
+            stop_behavior(motion_name)
+        except Exception as e:
+            print(f"Warning: Could not stop {motion_name} after the sound ended: {e}")
+
+
+def play_sound(name, motion_name=""):
+    """Replaces whatever sound is playing with /sound/<name>, streamed by Pepper,
+    with `motion_name` (if any) repeating until the sound ends.
+    Raises if Pepper can't start the stream."""
+    if not HOST_IP:
+        raise RuntimeError("The bridge doesn't know this computer's IP; reconnect to Pepper")
+    if motion_name and not motion_name.startswith("animations/") and not behavior_manager.isBehaviorInstalled(motion_name):
+        raise RuntimeError(f"Behavior '{motion_name}' is not installed on the robot")
+    url = f"http://{HOST_IP}:{HTTP_PORT}/sound/{name}"
+    loop_id = end_dance_loop()
+    if motion_name:
+        stop_all_motions()  # also ends any other loop; the new one starts below
+        loop_id = end_dance_loop()
+    audio_player.stopAll()
+    # playWebStream returns when the sound ends, so don't wait for it; an
+    # unreachable URL or unreadable file fails within the first moment.
+    # The dance starts right away so it is in time with the music.
+    future = audio_player.playWebStream(url, 1.0, 0.0, _async=True)
+    if motion_name:
+        threading.Thread(target=dance_while_sound_plays, args=(motion_name, future, loop_id), daemon=True).start()
+    future.wait(SOUND_START_WAIT_MS)
+    if future.isFinished() and future.hasError():
+        # (the dance loop sees the sound has ended and stops the dance itself)
+        raise RuntimeError(f"Pepper could not play the sound from {url}: {future.error()}")
+
+
 BATTERY_CURRENT_KEY = "Device/SubDeviceList/Battery/Current/Sensor/Value"
 
 # Behaviors started via /motion, so /stop-motion can stop them
@@ -231,6 +355,21 @@ class Handler(SimpleHTTPRequestHandler):
         global tablet, is_connected, HOST_IP, PEPPER_IP
 
         parsed = urlparse(self.path)
+
+        # A Story sound, fetched by Pepper's ALAudioPlayer (see play_sound)
+        if parsed.path.startswith("/sound/"):
+            with sounds_lock:
+                sound = sounds.get(parsed.path[len("/sound/"):])
+            if not sound:
+                self.send_error(404, "Sound not found")
+                return
+            content_type, audio = sound
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(audio)))
+            self.end_headers()
+            self.wfile.write(audio)
+            return
 
         if parsed.path == "/story":
             try:
@@ -574,6 +713,7 @@ class Handler(SimpleHTTPRequestHandler):
 
             if motion_name:
                 try:
+                    end_dance_loop()  # a sound's dance along doesn't come back after this one
                     run_motion(motion_name)
                     self.send_response(200)
                     self.end_headers()
@@ -727,6 +867,42 @@ class Handler(SimpleHTTPRequestHandler):
                 return
             try:
                 tts.stopAll()
+                self.send_json(200, {"success": True})
+            except Exception as e:
+                self.send_json(500, {"success": False, "error": str(e)})
+            return
+
+        # Play an MP3/WAV (`audioData` as a data URI) through Pepper's speakers,
+        # replacing the sound that is playing; speech can play over it. An
+        # optional `motion` dances along, repeating until the sound ends.
+        if self.path == "/play-sound":
+            if int(self.headers.get("Content-Length") or 0) > MAX_SOUND_BYTES:
+                self.send_json(413, {"success": False, "error": "Sound file is too large (15 MB max)"})
+                self.close_connection = True
+                return
+            if not self.require_connection_json():
+                return
+            try:
+                data = self.read_json()
+                name = store_sound(data.get("audioData"))
+                motion_name = data.get("motion") or ""
+                if not isinstance(motion_name, str):
+                    raise ValueError("motion must be a motion name")
+            except (ValueError, AttributeError) as e:
+                self.send_json(400, {"success": False, "error": str(e) or "Not an audio file"})
+                return
+            try:
+                play_sound(name, motion_name)
+                self.send_json(200, {"success": True})
+            except Exception as e:
+                self.send_json(500, {"success": False, "error": str(e)})
+            return
+
+        if self.path == "/stop-sound":
+            if not self.require_connection_json():
+                return
+            try:
+                audio_player.stopAll()  # its dance along (if any) stops with it
                 self.send_json(200, {"success": True})
             except Exception as e:
                 self.send_json(500, {"success": False, "error": str(e)})
@@ -1153,6 +1329,7 @@ def stop_all_motions():
     NAOqi 2.5's ALAnimationPlayer has no stopAll() and ignores future
     cancellation, but every playing animation is also a running behavior,
     so it is stopped through ALBehaviorManager instead."""
+    end_dance_loop()
     stop_driving()
     running = behavior_manager.getRunningBehaviors()
     for name in running:
@@ -1257,7 +1434,7 @@ def connect_pepper(reconnecting=False):
     not woken up and the tablet brightness is left alone: after a network
     drop Pepper keeps its state, and a robot that was put to rest (e.g. by
     Emergency Stop) must never start moving on its own."""
-    global tablet, tts, animated_speech, leds, file_manager, animation_player, motion, behavior_manager, audio_device, memory, battery, video_device, app, is_connected
+    global tablet, tts, animated_speech, leds, file_manager, animation_player, motion, behavior_manager, audio_device, audio_player, memory, battery, video_device, app, is_connected
     global camera_handles, camera_index
 
     # Clean up old session if any. A plain qi.Session is used rather than
@@ -1288,6 +1465,7 @@ def connect_pepper(reconnecting=False):
     motion = session.service("ALMotion")
     behavior_manager = session.service("ALBehaviorManager")
     audio_device = session.service("ALAudioDevice")
+    audio_player = session.service("ALAudioPlayer")
     memory = session.service("ALMemory")
     battery = session.service("ALBattery")
     video_device = session.service("ALVideoDevice")

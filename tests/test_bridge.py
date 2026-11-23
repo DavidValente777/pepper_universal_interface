@@ -4,12 +4,14 @@ The real `qi` library is not needed: a stub module is installed before
 bridge.py is imported. Run with:
     python3 -m unittest discover -s tests -p 'test_*.py'
 """
+import base64
 import http.client
 import json
 import os
 import sys
 import tempfile
 import threading
+import time
 import io
 import shutil
 import types
@@ -62,6 +64,12 @@ class BridgeTest(unittest.TestCase):
         bridge.file_manager = MagicMock()
         bridge.file_manager.getFileContents.return_value = bytearray(tiny_wav())
         bridge.FFMPEG = shutil.which("ffmpeg")
+        bridge.HOST_IP = "10.0.0.5"
+        bridge.HTTP_PORT = 8000
+        bridge.audio_player = MagicMock()
+        stream = bridge.audio_player.playWebStream.return_value
+        stream.isFinished.return_value = False  # still playing after the start wait
+        bridge.sounds.clear()
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -133,6 +141,142 @@ class BridgeTest(unittest.TestCase):
         self.assertEqual(json.loads(body)["value"], 75)
         self.request("POST", "/speak", {"text": "Hi"})
         bridge.tts.say.assert_called_once_with("\\vct=100\\ \\rspd=75\\ Hi")
+
+    # /play-sound, /sound/<name>, /stop-sound
+
+    MP3_URI = "data:audio/mpeg;base64," + base64.b64encode(b"ID3fake-mp3").decode()
+
+    def test_play_sound_streams_it_from_the_bridge(self):
+        status, body = self.request("POST", "/play-sound", {"audioData": self.MP3_URI})
+        self.assertEqual(status, 200, body)
+        bridge.audio_player.stopAll.assert_called_once_with()
+        url, volume, pan = bridge.audio_player.playWebStream.call_args.args
+        self.assertEqual((volume, pan), (1.0, 0.0))
+        self.assertEqual(bridge.audio_player.playWebStream.call_args.kwargs, {"_async": True})
+        self.assertRegex(url, r"^http://10\.0\.0\.5:8000/sound/[0-9a-f]{16}\.mp3$")
+        # Pepper fetches that URL from the bridge
+        with urllib.request.urlopen(url.replace("10.0.0.5", "127.0.0.1").replace(":8000", f":{self.port}")) as r:
+            self.assertEqual(r.headers.get("Content-Type"), "audio/mpeg")
+            self.assertEqual(r.read(), b"ID3fake-mp3")
+
+    def test_same_sound_reuses_its_url(self):
+        self.request("POST", "/play-sound", {"audioData": self.MP3_URI})
+        self.request("POST", "/play-sound", {"audioData": self.MP3_URI})
+        urls = {c.args[0] for c in bridge.audio_player.playWebStream.call_args_list}
+        self.assertEqual(len(urls), 1)
+        self.assertEqual(len(bridge.sounds), 1)
+
+    def test_play_sound_reports_a_stream_that_fails_to_start(self):
+        stream = bridge.audio_player.playWebStream.return_value
+        stream.isFinished.return_value = True
+        stream.hasError.return_value = True
+        stream.error.return_value = "could not open"
+        status, body = self.request("POST", "/play-sound", {"audioData": self.MP3_URI})
+        self.assertEqual(status, 500)
+        self.assertIn("could not open", json.loads(body)["error"])
+
+    def test_play_sound_refuses_non_audio(self):
+        for bad in ("data:image/png;base64,AAAA", "data:audio/ogg;base64,AAAA", "data:audio/mpeg;base64,***", "", None):
+            status, body = self.request("POST", "/play-sound", {"audioData": bad})
+            self.assertEqual(status, 400, bad)
+        bridge.audio_player.playWebStream.assert_not_called()
+
+    def test_play_sound_needs_the_robot(self):
+        bridge.is_connected = False
+        status, _ = self.request("POST", "/play-sound", {"audioData": self.MP3_URI})
+        self.assertEqual(status, 503)
+
+    def test_unknown_sound_is_404(self):
+        status, _ = self.request("GET", "/sound/0000000000000000.mp3")
+        self.assertEqual(status, 404)
+
+    def test_sound_cache_keeps_the_latest_few(self):
+        for i in range(bridge.SOUND_CACHE_SIZE + 3):
+            bridge.store_sound("data:audio/wav;base64," + base64.b64encode(f"RIFF{i}".encode()).decode())
+        self.assertEqual(len(bridge.sounds), bridge.SOUND_CACHE_SIZE)
+
+    # Dance along: repeats while the sound plays
+
+    HEY = "animations/Stand/Gestures/Hey_1"
+
+    class FakeSong:
+        """A playWebStream future that finishes when the test says so."""
+        def __init__(self):
+            self.ended = threading.Event()
+
+        def wait(self, ms):
+            self.ended.wait(ms / 1000)
+
+        def isFinished(self):
+            return self.ended.is_set()
+
+        def hasError(self):
+            return False
+
+    def start_dance_along(self):
+        """Plays a sound with the Hey dance; each dance takes 0.35 s unless stopped."""
+        song = self.FakeSong()
+        bridge.audio_player.playWebStream.return_value = song
+        bridge.SOUND_START_WAIT_MS = 50
+        bridge.motion = MagicMock()
+        bridge.behavior_manager = MagicMock()
+        stopped = threading.Event()
+        dancing = threading.Event()
+        runs = []
+
+        def run(name):
+            runs.append(name)
+            stopped.clear()
+            dancing.set()
+            stopped.wait(0.35)
+            dancing.clear()
+
+        def stop(name):
+            stopped.set()
+
+        bridge.animation_player = MagicMock()
+        bridge.animation_player.run.side_effect = run
+        bridge.behavior_manager.getRunningBehaviors.side_effect = lambda: [self.HEY] if dancing.is_set() else []
+        bridge.behavior_manager.stopBehavior.side_effect = stop
+        status, body = self.request("POST", "/play-sound", {"audioData": self.MP3_URI, "motion": self.HEY})
+        self.assertEqual(status, 200, body)
+        return song, runs
+
+    def test_dance_along_repeats_until_the_sound_ends_then_stops(self):
+        song, runs = self.start_dance_along()
+        time.sleep(1.0)
+        self.assertGreaterEqual(len(runs), 2, "the dance repeated while the song played")
+        self.assertEqual(set(runs), {self.HEY})
+        song.ended.set()
+        time.sleep(0.5)
+        bridge.behavior_manager.stopBehavior.assert_called_with(self.HEY)
+        count = len(runs)
+        time.sleep(0.5)
+        self.assertEqual(len(runs), count, "no more dancing after the song ended")
+
+    def test_stop_motion_ends_the_dance_along(self):
+        song, runs = self.start_dance_along()
+        time.sleep(0.5)
+        status, _ = self.request("POST", "/stop-motion", {})
+        self.assertEqual(status, 200)
+        time.sleep(0.2)
+        count = len(runs)
+        time.sleep(0.6)
+        self.assertEqual(len(runs), count, "the dance doesn't come back while the song still plays")
+        song.ended.set()
+
+    def test_dance_along_must_be_installed(self):
+        bridge.behavior_manager = MagicMock()
+        bridge.behavior_manager.isBehaviorInstalled.return_value = False
+        status, body = self.request("POST", "/play-sound", {"audioData": self.MP3_URI, "motion": "my_app/dance"})
+        self.assertEqual(status, 500)
+        self.assertIn("not installed", json.loads(body)["error"])
+        bridge.audio_player.playWebStream.assert_not_called()
+
+    def test_stop_sound(self):
+        status, _ = self.request("POST", "/stop-sound", {})
+        self.assertEqual(status, 200)
+        bridge.audio_player.stopAll.assert_called_once_with()
 
     # /set-word-gap
 

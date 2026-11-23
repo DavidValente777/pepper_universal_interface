@@ -2,7 +2,7 @@
 // fires one at a time during filming. Pure helpers shared by story-page.js
 // and the Node tests: no DOM access, and inputs are never modified.
 
-const STORY_ITEM_TYPES = ["say", "animatedSay", "dance", "image"];
+const STORY_ITEM_TYPES = ["say", "animatedSay", "dance", "image", "sound"];
 const DEFAULT_EYE_COLOR = "#ffffff";
 const EYE_COLOR_PATTERN = /^#[0-9a-fA-F]{6}$/;
 
@@ -15,6 +15,8 @@ function makeItem(type, id) {
   if (type === "say" || type === "animatedSay") return { ...item, text: "" };
   if (type === "dance") return { ...item, motion: "" };
   if (type === "image") return { ...item, name: "", imageData: "" };
+  // motion: optional dance that starts together with the sound
+  if (type === "sound") return { ...item, name: "", audioData: "", motion: "" };
   throw new Error(`Unknown story item type "${type}"`);
 }
 
@@ -71,6 +73,13 @@ function validateItem(raw) {
       const okImage = raw.imageData === "" || (typeof raw.imageData === "string" && raw.imageData.startsWith("data:image/"));
       return typeof raw.name === "string" && okImage
         ? { type: raw.type, played, name: raw.name, imageData: raw.imageData }
+        : null;
+    }
+    case "sound": {
+      const okAudio = raw.audioData === "" || (typeof raw.audioData === "string" && raw.audioData.startsWith("data:audio/"));
+      return typeof raw.name === "string" && okAudio
+        ? { type: raw.type, played, name: raw.name, audioData: raw.audioData,
+            motion: typeof raw.motion === "string" ? raw.motion : "" }
         : null;
     }
     default:

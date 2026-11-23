@@ -8,7 +8,7 @@ const say = (id, text = "hi") => ({ id, type: "say", text, played: false });
 
 test("emptyStory has no items and white eyes", () => {
   assert.deepEqual(st.emptyStory(), { version: 1, eyeColor: "#ffffff", items: [] });
-  assert.deepEqual(st.STORY_ITEM_TYPES, ["say", "animatedSay", "dance", "image"]);
+  assert.deepEqual(st.STORY_ITEM_TYPES, ["say", "animatedSay", "dance", "image", "sound"]);
 });
 
 test("makeItem shapes each kind", () => {
@@ -16,6 +16,24 @@ test("makeItem shapes each kind", () => {
   assert.deepEqual(st.makeItem("animatedSay", "b"), { id: "b", type: "animatedSay", played: false, text: "" });
   assert.deepEqual(st.makeItem("dance", "c"), { id: "c", type: "dance", played: false, motion: "" });
   assert.deepEqual(st.makeItem("image", "d"), { id: "d", type: "image", played: false, name: "", imageData: "" });
+  assert.deepEqual(st.makeItem("sound", "e"), { id: "e", type: "sound", played: false, name: "", audioData: "", motion: "" });
+});
+
+test("validateStory keeps sounds with audio data URIs or none yet", () => {
+  let n = 0;
+  const { story, dropped } = st.validateStory({
+    items: [
+      { type: "sound", name: "song.mp3", audioData: "data:audio/mpeg;base64,AA" },
+      { type: "sound", name: "", audioData: "", motion: "animations/Stand/Gestures/Hey_1" },
+      { type: "sound", name: "x.png", audioData: "data:image/png;base64,AA" },
+      { type: "sound", audioData: "data:audio/mpeg;base64,AA" },
+    ],
+  }, () => `id${++n}`);
+  assert.equal(dropped, 2);
+  assert.deepEqual(story.items, [
+    { id: "id1", type: "sound", played: false, name: "song.mp3", audioData: "data:audio/mpeg;base64,AA", motion: "" },
+    { id: "id2", type: "sound", played: false, name: "", audioData: "", motion: "animations/Stand/Gestures/Hey_1" },
+  ]);
 });
 
 test("addItem and updateItem return new stories", () => {

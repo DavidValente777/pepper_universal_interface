@@ -112,11 +112,12 @@ The connection is polled every 5 seconds. If it drops, the server will attempt t
 
 Made for scripted conversations, e.g. Pepper talking with a presenter on camera. Prepare the script in advance, then press each line's ▶ at the right moment: nothing plays on its own, so you control the timing.
 
-- **Add items** with **+ Say**, **+ Animated say**, **+ Dance** (any animation installed on the robot) and **+ Image** (JPG/PNG shown full-screen on the tablet). Drag the ⠿ handle to reorder, 🗑 to delete (with a few seconds to **Undo**).
-- **▶ plays immediately and independently.** Pressing a speech while Pepper is still talking cuts it off mid-sentence and says the new line. Images and dances can run while Pepper talks; a new dance stops the previous one.
+- **Add items** with **+ Say**, **+ Animated say**, **+ Dance** (any animation installed on the robot), **+ Image** (JPG/PNG shown full-screen on the tablet) and **+ Sound** (an MP3 or WAV up to 15 MB, played through Pepper's speakers; a small player lets you preview it on the computer first). A sound can have a **Dance along**: a dance that starts at the same moment as the sound and repeats until the sound ends, when it is stopped mid-move (✕ removes it). STOP, another sound or another dance ends it too. Drag the ⠿ handle to reorder, 🗑 to delete (with a few seconds to **Undo**).
+- **▶ plays immediately and independently.** Pressing a speech while Pepper is still talking cuts it off mid-sentence and says the new line. Images, sounds and dances can run while Pepper talks; a new dance stops the previous one, and a new sound stops the previous sound.
 - Played items get a ✓ so you can see where you are; **Reset marks** clears them between takes.
-- **STOP** stops speech, dances and motions at once (the tablet is left as it is).
+- **STOP** stops speech, sounds, dances and motions at once (the tablet is left as it is).
 - **⬇** on a speech line downloads it as an audio file (`02_hello-there.mp3`), made by Pepper's own voice engine at the current pitch, speed and word gap: a clean recording without room sound, handy for the edit. It's an MP3 when `ffmpeg` is installed on the computer running the bridge, otherwise a WAV. The volume slider doesn't affect it.
+- Sounds are streamed by Pepper from the bridge (`http://<this computer's IP>:8000/sound/...`), so nothing is copied onto the robot. The robot must be able to reach this computer on the bridge's port: if ▶ on a sound reports that Pepper could not play it, check that the computer's IP in the connection panel is right and that no firewall blocks the port.
 - Volume, pitch, speech speed, word gap, brightness and eye colour are on the page too. The eye colour is saved with the story and applied when Pepper connects.
 - **Saving is automatic**, to `stories/story.json` next to `bridge.py` on this computer, so reloading the page or restarting the browser loses nothing. You can edit the story without a robot connected. **Export** downloads a copy (images included) that **Import** loads on another computer.
 
@@ -145,6 +146,9 @@ Made for scripted conversations, e.g. Pepper talking with a presenter on camera.
 | POST | `/motion` | Play a named animation or app animation (`motion`) |
 | POST | `/stop-motion` | Stop all animations |
 | POST | `/stop-speech` | Interrupt current speech |
+| POST | `/play-sound` | Play an MP3/WAV (`audioData` as data URI, 15 MB max) through Pepper's speakers, replacing the sound that is playing. Optional `motion` is repeated until the sound ends |
+| GET | `/sound/<name>` | A sound sent with `/play-sound`, fetched by Pepper while it plays (the last 8 are kept in memory) |
+| POST | `/stop-sound` | Stop the sound that is playing (and its dance along) |
 | POST | `/drive` | Drive the wheels (`x` forward, `y` left, `theta` turn left — each −1…1 — and `speed` 0.1…1). Must be re-sent at least every 0.6 s or the wheels stop |
 | POST | `/drive-stop` | Stop the wheels |
 | POST | `/set-obstacle-avoidance` | Turn obstacle avoidance on/off (`enabled`: true/false) |

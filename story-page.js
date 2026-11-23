@@ -3,7 +3,7 @@
 // The story is saved on the laptop through the bridge (GET/POST /story).
 // Uses story.js for the model and controller.js for shared helpers.
 
-const STORY_TYPE_LABELS = { say: "Say", animatedSay: "Animated say", dance: "Dance", image: "Image" };
+const STORY_TYPE_LABELS = { say: "Say", animatedSay: "Animated say", dance: "Dance", image: "Image", sound: "Sound" };
 const STORY_SAVE_DELAY_MS = 500;
 const STORY_UNDO_MS = 6000;
 
@@ -178,7 +178,98 @@ function storyItemBody(item, li) {
     });
     label.appendChild(input);
     body.appendChild(label);
+  } else if (item.type === "sound") {
+    const label = document.createElement("label");
+    label.className = "file-input-label story-image-label" + (item.audioData ? " has-file" : "");
+    label.textContent = item.audioData ? item.name || "Sound" : "Choose sound…";
+    label.title = item.audioData ? "Choose another sound" : "Choose an MP3 or WAV";
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".mp3,.wav,audio/mpeg,audio/wav,audio/x-wav";
+    input.hidden = true;
+    input.addEventListener("change", async () => {
+      const file = input.files[0];
+      if (!file) return;
+      try {
+        const audioData = await readSoundFile(file);
+        setStory(updateItem(story, item.id, { audioData, name: file.name }));
+      } catch (error) {
+        setStoryItemError(item.id, error.message);
+      }
+    });
+    label.appendChild(input);
+    body.appendChild(label);
+    if (item.audioData) {
+      // Listen on this computer before playing it on Pepper
+      const preview = document.createElement("audio");
+      preview.className = "story-preview";
+      preview.controls = true;
+      preview.preload = "none";
+      preview.src = item.audioData;
+      preview.title = "Preview on this computer";
+      body.appendChild(preview);
+    }
+    storySoundDance(item, body);
   }
+}
+
+// The optional dance inside a sound item: it starts together with the sound
+function storySoundDance(item, body) {
+  const row = document.createElement("div");
+  row.className = "story-subblock";
+  const label = document.createElement("span");
+  label.className = "story-subblock-label";
+  label.textContent = "Dance along ↻";
+  label.title = "Repeats until the sound ends";
+  const root = document.createElement("div");
+  root.className = "motion-picker";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.className = "story-subblock-clear";
+  clear.textContent = "✕";
+  clear.title = "No dance";
+  clear.setAttribute("aria-label", "No dance");
+  const warning = document.createElement("span");
+  warning.className = "story-warning";
+  row.append(label, root, clear, warning);
+  body.appendChild(row);
+
+  const show = (motion) => {
+    clear.hidden = !motion;
+    warning.textContent = danceNotFound({ motion }) ? "Not found on this robot" : "";
+  };
+  const picker = createMotionPicker(root, (path) => {
+    setStory(updateItem(story, item.id, { motion: path }), { render: false });
+    show(path);
+  });
+  storyPickers.push(picker);
+  if (item.motion) setMotionPickerValue(picker, item.motion);
+  show(item.motion);
+  clear.addEventListener("click", () => {
+    setMotionPickerValue(picker, "");
+    setStory(updateItem(story, item.id, { motion: "" }), { render: false });
+    show("");
+  });
+}
+
+const STORY_SOUND_MAX_BYTES = 15 * 1024 * 1024;
+const STORY_SOUND_TYPES = { mp3: "audio/mpeg", wav: "audio/wav" };
+
+// The file as a data:audio/... URI. Browsers sometimes report no type (or a
+// generic one) for .mp3/.wav, so the extension decides when they do.
+function readSoundFile(file) {
+  const extension = (file.name.split(".").pop() || "").toLowerCase();
+  const type = STORY_SOUND_TYPES[extension] || (/^audio\/(mpeg|mp3|wav|x-wav|wave)$/.test(file.type) ? file.type : null);
+  if (!type) return Promise.reject(new Error("Choose an MP3 or WAV file"));
+  if (file.size > STORY_SOUND_MAX_BYTES) {
+    return Promise.reject(new Error(`${file.name} is too large (15 MB max)`));
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result).replace(/^data:[^;,]*/, "data:" + type));
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}`));
+    reader.readAsDataURL(file);
+  });
 }
 
 function createStoryItemElement(item, index) {
@@ -303,7 +394,7 @@ function attachStoryDrag(li, id) {
 // ─── Playing ─────────────────────────────────────────────────────────────────
 
 function canPlayStoryItem(item) {
-  return isConnected && !(item.type === "image" && !item.imageData);
+  return isConnected && !(item.type === "image" && !item.imageData) && !(item.type === "sound" && !item.audioData);
 }
 
 function storyItemElement(id) {
@@ -325,18 +416,25 @@ function storyItemRequest(item) {
   }
   if (item.type === "dance") {
     if (!item.motion) return { error: "Choose a dance first" };
-    return {
-      send: async () => {
-        await postJson("/stop-motion"); // two dances at once can't work
-        return postJson("/motion", { motion: item.motion });
-      },
-    };
+    return { send: () => startStoryDance(item.motion) };
   }
   if (item.type === "image") {
     if (!item.imageData) return { error: "Choose an image first" };
     return { send: () => postJson("/send-image", { imageData: item.imageData }) };
   }
+  if (item.type === "sound") {
+    if (!item.audioData) return { error: "Choose a sound first" };
+    // Pepper streams it from the bridge; a new sound replaces the one playing.
+    // The bridge starts the dance along (if any) with it and repeats it until
+    // the sound ends.
+    return { send: () => postJson("/play-sound", { audioData: item.audioData, motion: item.motion || "" }) };
+  }
   return { error: `Unknown item type "${item.type}"` };
+}
+
+async function startStoryDance(motion) {
+  await postJson("/stop-motion"); // two dances at once can't work
+  return postJson("/motion", { motion });
 }
 
 // Every ▶ fires at once and on its own: nothing waits for an earlier item
@@ -351,7 +449,16 @@ async function playStoryItem(id) {
   storyItemElement(id)?.classList.add("played", "playing");
   try {
     const r = await send();
-    if (!r.ok) throw new Error((await r.text()) || `HTTP ${r.status}`);
+    if (!r.ok) {
+      const body = await r.text();
+      let message = body;
+      try {
+        message = JSON.parse(body).error || body; // JSON endpoints
+      } catch {
+        // plain-text error
+      }
+      throw new Error(message || `HTTP ${r.status}`);
+    }
   } catch (err) {
     setStoryItemError(id, err.message);
     logError(`Story ${STORY_TYPE_LABELS[item.type]}`, err.message);
@@ -424,9 +531,9 @@ async function downloadStoryAudio(id) {
 }
 
 async function stopStory() {
-  const results = await Promise.allSettled([postJson("/stop-speech"), postJson("/stop-motion")]);
+  const results = await Promise.allSettled([postJson("/stop-speech"), postJson("/stop-motion"), postJson("/stop-sound")]);
   results.forEach((result, i) => {
-    const what = i === 0 ? "speech" : "motion";
+    const what = ["speech", "motion", "sound"][i];
     if (result.status === "rejected") logError("Story STOP", `Could not stop ${what}: ${result.reason.message}`);
     else if (!result.value.ok) logError("Story STOP", `Could not stop ${what} (HTTP ${result.value.status})`);
   });
@@ -487,6 +594,7 @@ storyEl("storyAddSay").addEventListener("click", () => addStoryItem("say"));
 storyEl("storyAddAnimatedSay").addEventListener("click", () => addStoryItem("animatedSay"));
 storyEl("storyAddDance").addEventListener("click", () => addStoryItem("dance"));
 storyEl("storyAddImage").addEventListener("click", () => addStoryItem("image"));
+storyEl("storyAddSound").addEventListener("click", () => addStoryItem("sound"));
 storyEl("storyUndoBtn").addEventListener("click", undoStoryDelete);
 storyEl("storyExport").addEventListener("click", exportStory);
 storyEl("storyImportBtn").addEventListener("click", () => storyEl("storyImportInput").click());

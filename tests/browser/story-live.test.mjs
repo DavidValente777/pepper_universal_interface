@@ -129,7 +129,78 @@ test("Reset marks clears every tick", async () => {
   assert.deepEqual(result, { played: [false, false], ticks: 0 });
 });
 
-test("STOP stops speech and motion but leaves the tablet", async () => {
+test("sound ▶ sends the sound and is disabled without one", async () => {
+  await fresh([
+    item("a", "sound", { name: "song.mp3", audioData: "data:audio/mpeg;base64,AA" }),
+    item("b", "sound", { name: "", audioData: "" }),
+  ]);
+  const result = await page.evaluate(`
+    ${PLAY(0)}
+    await new Promise((r) => setTimeout(r, 100));
+    return { bodies: ${BODIES("/play-sound")},
+      disabled: [...document.querySelectorAll("#storyList .story-play")].map((b) => b.disabled),
+      preview: [...document.querySelectorAll("#storyList .story-item")].map((li) => !!li.querySelector("audio.story-preview")),
+      labels: [...document.querySelectorAll("#storyList .story-image-label")].map((l) => l.textContent) };`);
+  assert.deepEqual(result.bodies, [{ audioData: "data:audio/mpeg;base64,AA", motion: "" }]);
+  assert.deepEqual(result.disabled, [false, true]);
+  assert.deepEqual(result.preview, [true, false]);
+  assert.deepEqual(result.labels, ["song.mp3", "Choose sound…"]);
+});
+
+test("a sound with a dance along hands both to the bridge in one request; ✕ removes the dance", async () => {
+  await fresh([item("a", "sound", { name: "song.mp3", audioData: "data:audio/mpeg;base64,AA", motion: HEY })]);
+  const result = await page.evaluate(`
+    ${PLAY(0)}
+    await new Promise((r) => setTimeout(r, 100));
+    const paths = __bridge.calls.map((c) => c.path).filter((p) => ["/play-sound", "/stop-motion", "/motion"].includes(p));
+    const clear = document.querySelector("#storyList .story-subblock-clear");
+    const clearShown = !clear.hidden;
+    clear.click();
+    return { paths, body: ${BODIES("/play-sound")}[0], clearShown, clearHidden: clear.hidden,
+      motion: story.items[0].motion,
+      label: document.querySelector("#storyList .story-subblock .motion-picker-value").textContent };`);
+  assert.deepEqual(result.paths, ["/play-sound"], "the bridge starts and repeats the dance itself");
+  assert.deepEqual(result.body, { audioData: "data:audio/mpeg;base64,AA", motion: HEY });
+  assert.equal(result.clearShown, true);
+  assert.equal(result.clearHidden, true);
+  assert.equal(result.motion, "");
+  assert.equal(result.label, "-- Select motion --");
+});
+
+test("a sound the bridge can't play shows the bridge's message on the item", async () => {
+  await fresh([item("a", "sound", { name: "t.mp3", audioData: "data:audio/mpeg;base64,AA", motion: HEY })]);
+  const result = await page.evaluate(`
+    __bridge.failures["/play-sound"] = JSON.stringify({ success: false, error: "Behavior 'x' is not installed on the robot" });
+    ${PLAY(0)}
+    await new Promise((r) => setTimeout(r, 100));
+    delete __bridge.failures["/play-sound"];
+    return document.querySelector("#storyList .story-error").textContent;`);
+  assert.equal(result, "Behavior 'x' is not installed on the robot");
+});
+
+test("+ Sound adds a sound item; choosing a file stores it as audio, other files are refused", async () => {
+  await fresh([]);
+  const result = await page.evaluate(`
+    document.getElementById("storyAddSound").click();
+    const choose = async (file) => {
+      const input = document.querySelector("#storyList .story-item.sound input[type=file]");
+      const dt = new DataTransfer();
+      dt.items.add(file);
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change"));
+      await new Promise((r) => setTimeout(r, 100));
+    };
+    await choose(new File(["hello"], "notes.txt", { type: "text/plain" }));
+    const refused = document.querySelector("#storyList .story-error").textContent;
+    await choose(new File(["ID3"], "song.mp3", { type: "" }));
+    return { refused, item: story.items[0] };`);
+  assert.equal(result.refused, "Choose an MP3 or WAV file");
+  assert.equal(result.item.type, "sound");
+  assert.equal(result.item.name, "song.mp3");
+  assert.equal(result.item.audioData, "data:audio/mpeg;base64,SUQz");
+});
+
+test("STOP stops speech, sound and motion but leaves the tablet", async () => {
   await fresh([]);
   const paths = await page.evaluate(`
     document.getElementById("storyStopBtn").click();
@@ -137,6 +208,7 @@ test("STOP stops speech and motion but leaves the tablet", async () => {
     return __bridge.calls.map((c) => c.path);`);
   assert.ok(paths.includes("/stop-speech"));
   assert.ok(paths.includes("/stop-motion"));
+  assert.ok(paths.includes("/stop-sound"));
   assert.ok(!paths.includes("/clear-tablet"));
 });
 

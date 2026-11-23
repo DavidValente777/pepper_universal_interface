@@ -1509,6 +1509,7 @@ kbd {
 .story-add-btn.animatedSay { border-left-color: #0e7490; }
 .story-add-btn.dance { border-left-color: #a78bfa; }
 .story-add-btn.image { border-left-color: #e879f9; }
+.story-add-btn.sound { border-left-color: #f59e0b; }
 .story-secondary-btn {
   background: white;
   color: var(--text);
@@ -1550,6 +1551,7 @@ kbd {
 .story-item.animatedSay { border-left-color: #0e7490; }
 .story-item.dance { border-left-color: #a78bfa; }
 .story-item.image { border-left-color: #e879f9; }
+.story-item.sound { border-left-color: #f59e0b; }
 .story-item.played { background: #f0fdf4; }
 .story-item.playing { background: #eff6ff; box-shadow: 0 0 0 2px var(--primary) inset; }
 .story-item.dragging { opacity: 0.4; }
@@ -1626,6 +1628,43 @@ kbd {
   margin: 0;
   flex: 1;
   text-align: left;
+}
+.story-item.sound .story-body {
+  flex-wrap: wrap;
+  row-gap: 8px;
+}
+/* The dance that starts together with a sound */
+.story-subblock {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border-left: 4px solid #a78bfa;
+  border-radius: 6px;
+  background: white;
+}
+.story-subblock-label {
+  font-size: 13px;
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--neutral);
+}
+.story-subblock-clear {
+  padding: 4px 10px;
+  background: white;
+  color: var(--text);
+  border: 1px solid var(--input-border);
+}
+.story-subblock-clear[hidden] {
+  display: none;
+}
+/* Preview of a Story sound on this computer (not on Pepper) */
+.story-preview {
+  height: 36px;
+  max-width: 260px;
+  flex: 1;
 }
 .story-played {
   grid-area: played;
